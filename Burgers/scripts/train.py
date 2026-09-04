@@ -14,6 +14,9 @@ from burgers_rf.config import (  # noqa: E402
     DTYPE,
     EPOCHS,
     LR,
+    LOCAL_CENTER,
+    LOCAL_TYPE,
+    LOCAL_WIDTH,
     M_BD,
     M_INT,
     M_TEST,
@@ -25,6 +28,7 @@ from burgers_rf.config import (  # noqa: E402
     NX,
     SIGMA_T,
     SIGMA_X,
+    USE_LOCAL,
     WEIGHT_DECAY,
     get_device,
 )
@@ -47,7 +51,17 @@ def main():
     y_pred = None
 
     for _ in range(N_TRIALS):
-        model = BurgersRF(NX, NT, SIGMA_X, SIGMA_T, device=device).to(device)
+        model = BurgersRF(
+            NX,
+            NT,
+            SIGMA_X,
+            SIGMA_T,
+            use_local=USE_LOCAL,
+            local_type=LOCAL_TYPE,
+            local_center=LOCAL_CENTER,
+            local_width=LOCAL_WIDTH,
+            device=device,
+        ).to(device)
         optimizer = optim.Adam(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 
         train(model, optimizer, x_train, t_train, M_BD, M_INT, NV, g, device, epochs=EPOCHS)
@@ -58,9 +72,37 @@ def main():
         errors.append(e)
 
     print(errors)
-    print(np.mean(errors))
+    mean_error = np.mean(errors)
+    print(mean_error)
 
-    plot_solution_slices(x_test, y_true, y_pred)
+    if USE_LOCAL and LOCAL_TYPE == "gaussian":
+        model_type = "gaussian"
+        output_dir = PROJECT_DIR / "outputs" / "gaussian"
+        base_filename = (
+            f"gaussian_s{LOCAL_CENTER}_sigma{LOCAL_WIDTH}_trials{N_TRIALS}_epochs{EPOCHS}"
+        )
+    else:
+        model_type = "baseline"
+        output_dir = PROJECT_DIR / "outputs" / "baseline"
+        base_filename = f"baseline_trials{N_TRIALS}_epochs{EPOCHS}"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fig, ax = plot_solution_slices(x_test, y_true, y_pred)
+    fig.savefig(output_dir / f"{base_filename}.png")
+
+    summary_path = output_dir / f"{base_filename}.txt"
+    with summary_path.open("w") as summary_file:
+        summary_file.write(f"model type: {model_type}\n")
+        summary_file.write(f"USE_LOCAL: {USE_LOCAL}\n")
+        summary_file.write(f"LOCAL_TYPE: {LOCAL_TYPE}\n")
+        if USE_LOCAL and LOCAL_TYPE == "gaussian":
+            summary_file.write(f"LOCAL_CENTER: {LOCAL_CENTER}\n")
+            summary_file.write(f"LOCAL_WIDTH: {LOCAL_WIDTH}\n")
+        summary_file.write(f"N_TRIALS: {N_TRIALS}\n")
+        summary_file.write(f"EPOCHS: {EPOCHS}\n")
+        summary_file.write(f"individual trial errors: {errors}\n")
+        summary_file.write(f"mean relative L2 error: {mean_error}\n")
+
     plt.show()
 
 
