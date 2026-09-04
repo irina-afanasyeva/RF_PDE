@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.optim as optim
@@ -60,6 +61,7 @@ def main():
     print(np.mean(errors))
 
     plot_solution_slices(x_test, y_true, y_pred)
+    plt.show()
 
 
 if __name__ == "__main__":
