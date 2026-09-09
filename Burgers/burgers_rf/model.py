@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from .local_features import GaussianLocal
+from .local_features import GaussianLocal, GaussianSumLocal
 
 
 class BurgersRF(nn.Module):
@@ -19,10 +19,12 @@ class BurgersRF(nn.Module):
         local_type="gaussian",
         local_center=0.0,
         local_width=0.05,
+        local_widths=None,
         device=None,
     ):
         super(BurgersRF, self).__init__()
         self.use_local = use_local
+        self.local_type = local_type
 
         if x_dist == "Gaussian":
             self.Wx = nn.Parameter(torch.randn(1, Nx) / sigma_x, requires_grad=False).to(device)
@@ -43,10 +45,16 @@ class BurgersRF(nn.Module):
         self.model = nn.Sequential(nn.Linear(Nx * Nt, 1, bias=False))
 
         if self.use_local:
-            if local_type != "gaussian":
+            if local_type == "gaussian":
+                self.local_feature = GaussianLocal(center=local_center, width=local_width)
+                self.local_coefficients = nn.Parameter(torch.zeros(Nt, 1))
+            elif local_type == "gaussian_sum":
+                if not local_widths:
+                    raise ValueError("local_widths must be provided for local_type='gaussian_sum'")
+                self.local_feature = GaussianSumLocal(center=local_center, widths=local_widths)
+                self.local_coefficients = nn.Parameter(torch.zeros(Nt, len(local_widths)))
+            else:
                 raise ValueError(f"Unsupported local feature type: {local_type}")
-            self.local_feature = GaussianLocal(center=local_center, width=local_width)
-            self.local_coefficients = nn.Parameter(torch.zeros(Nt, 1))
 
     def forward(self, x, t):
         phi_x = torch.cos(x @ self.Wx + self.bx).to(x.device)
@@ -59,6 +67,11 @@ class BurgersRF(nn.Module):
 
         u_rf = self.model(result_einsum)
         if self.use_local:
-            u_local = self.local_feature(x) * (phi_t @ self.local_coefficients)
+            if self.local_type == "gaussian":
+                u_local = self.local_feature(x) * (phi_t @ self.local_coefficients)
+            else:  # gaussian_sum
+                basis = self.local_feature(x)
+                temporal = phi_t @ self.local_coefficients
+                u_local = (basis * temporal).sum(dim=1, keepdim=True)
             return u_rf + u_local
         return u_rf
