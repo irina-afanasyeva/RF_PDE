@@ -26,11 +26,13 @@ from burgers_rf.config import (  # noqa: E402
     NT,
     NV,
     NX,
+    SEED,
     SIGMA_T,
     SIGMA_X,
     USE_LOCAL,
     WEIGHT_DECAY,
     get_device,
+    set_seed,
 )
 from burgers_rf.data import g, make_reference_values, make_test_grid, sample_training_points  # noqa: E402
 from burgers_rf.model import BurgersRF  # noqa: E402
@@ -39,6 +41,7 @@ from test import plot_solution_slices, relative_l2  # noqa: E402
 
 
 def main():
+    set_seed(SEED)
     torch.set_default_dtype(DTYPE)
     device = get_device()
     print(device)

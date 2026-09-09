@@ -4,6 +4,9 @@ import torch
 
 DTYPE = torch.float64
 
+# Reproducibility
+SEED = 42
+
 # PDE parameters
 NV = 0.01 / np.pi
 
@@ -26,7 +29,7 @@ X_DIST = "Gaussian"
 T_DIST = "Gaussian"
 
 # Local enrichment parameters
-USE_LOCAL = True
+USE_LOCAL = False
 LOCAL_TYPE = "gaussian"
 LOCAL_CENTER = 0.0
 LOCAL_WIDTH = 0.05
@@ -41,3 +44,10 @@ IC_BC_WEIGHT = 1e3
 
 def get_device():
     return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
