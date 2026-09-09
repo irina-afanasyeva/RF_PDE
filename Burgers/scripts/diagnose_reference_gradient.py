@@ -22,6 +22,7 @@ from burgers_rf.data import make_reference_values  # noqa: E402
 N_X_FINE = 1000
 TIMES = [0.5, 0.75, 1.0]
 TOP_K = 20  # how many steepest points to report per time
+WIDTH_THRESHOLDS = [0.10, 0.25, 0.50]  # relative to grad_max, for width diagnostic only
 
 OUTPUT_DIR = PROJECT_DIR / "outputs" / "diagnostics"
 
@@ -49,6 +50,7 @@ def main():
     fig, (ax_u, ax_grad) = plt.subplots(1, 2, figsize=(12, 5))
 
     summary_lines = []
+    width_rows = []  # (t, threshold, x_left, x_right, width, half_width)
     for i, t in enumerate(TIMES):
         u = y_true[i]
         du_dx = np.gradient(u, x_fine_np)
@@ -73,11 +75,33 @@ def main():
             )
         summary_lines.append("")
 
+        grad_max = peak_val
+        for threshold in WIDTH_THRESHOLDS:
+            mask = abs_du_dx >= threshold * grad_max
+            xs = x_fine_np[mask]
+            x_left = xs.min()
+            x_right = xs.max()
+            width = x_right - x_left
+            half_width = width / 2
+            width_rows.append((t, threshold, x_left, x_right, width, half_width))
+
         data_path = OUTPUT_DIR / f"reference_gradient_t{t}.csv"
         with data_path.open("w") as f:
             f.write("x,u_true,abs_du_dx\n")
             for xv, uv, gv in zip(x_fine_np, u, abs_du_dx):
                 f.write(f"{xv},{uv},{gv}\n")
+
+    summary_lines.append("Shock-region width diagnostic (relative to grad_max = max_x |du/dx| per t):")
+    summary_lines.append(
+        f"{'t':<8}{'threshold':<13}{'x_left':<12}{'x_right':<12}{'width':<12}{'half_width':<12}"
+    )
+    for t, threshold, x_left, x_right, width, half_width in width_rows:
+        threshold_label = f"{threshold * 100:.0f}%"
+        summary_lines.append(
+            f"{t:<8.2f}{threshold_label:<13}{x_left:<12.6f}{x_right:<12.6f}"
+            f"{width:<12.6f}{half_width:<12.6f}"
+        )
+    summary_lines.append("")
 
     ax_u.set_xlabel("x")
     ax_u.set_ylabel("u_true(x, t)")
