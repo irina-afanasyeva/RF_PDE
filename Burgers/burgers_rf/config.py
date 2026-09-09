@@ -25,9 +25,15 @@ DF_T = 1
 X_DIST = "Gaussian"
 T_DIST = "Gaussian"
 
+# Local enrichment parameters
+USE_LOCAL = True
+LOCAL_TYPE = "gaussian"
+LOCAL_CENTER = 0.0
+LOCAL_WIDTH = 0.05
+
 # Training parameters
-N_TRIALS = 10
-EPOCHS = 5000
+N_TRIALS = 1
+EPOCHS = 1000
 LR = 5e-4
 WEIGHT_DECAY = 1
 IC_BC_WEIGHT = 1e3

@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from .local_features import GaussianLocal
+
 
 class BurgersRF(nn.Module):
     def __init__(
@@ -13,9 +15,14 @@ class BurgersRF(nn.Module):
         df_t=1,
         x_dist="Gaussian",
         t_dist="Gaussian",
+        use_local=False,
+        local_type="gaussian",
+        local_center=0.0,
+        local_width=0.05,
         device=None,
     ):
         super(BurgersRF, self).__init__()
+        self.use_local = use_local
 
         if x_dist == "Gaussian":
             self.Wx = nn.Parameter(torch.randn(1, Nx) / sigma_x, requires_grad=False).to(device)
@@ -35,6 +42,12 @@ class BurgersRF(nn.Module):
 
         self.model = nn.Sequential(nn.Linear(Nx * Nt, 1, bias=False))
 
+        if self.use_local:
+            if local_type != "gaussian":
+                raise ValueError(f"Unsupported local feature type: {local_type}")
+            self.local_feature = GaussianLocal(center=local_center, width=local_width)
+            self.local_coefficients = nn.Parameter(torch.zeros(Nt, 1))
+
     def forward(self, x, t):
         phi_x = torch.cos(x @ self.Wx + self.bx).to(x.device)
         phi_t = torch.cos(t @ self.Wt + self.bt).to(t.device)
@@ -44,5 +57,8 @@ class BurgersRF(nn.Module):
             phi_x.shape[1] * phi_t.shape[1],
         ).to(x.device)
 
-        u = self.model(result_einsum)
-        return u
+        u_rf = self.model(result_einsum)
+        if self.use_local:
+            u_local = self.local_feature(x) * (phi_t @ self.local_coefficients)
+            return u_rf + u_local
+        return u_rf
