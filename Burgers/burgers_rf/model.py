@@ -56,7 +56,7 @@ class BurgersRF(nn.Module):
             else:
                 raise ValueError(f"Unsupported local feature type: {local_type}")
 
-    def forward(self, x, t):
+    def _compute_components(self, x, t):
         phi_x = torch.cos(x @ self.Wx + self.bx).to(x.device)
         phi_t = torch.cos(t @ self.Wt + self.bt).to(t.device)
 
@@ -73,5 +73,18 @@ class BurgersRF(nn.Module):
                 basis = self.local_feature(x)
                 temporal = phi_t @ self.local_coefficients
                 u_local = (basis * temporal).sum(dim=1, keepdim=True)
-            return u_rf + u_local
-        return u_rf
+            u_total = u_rf + u_local
+        else:
+            u_local = torch.zeros_like(u_rf)
+            u_total = u_rf
+
+        return u_total, u_rf, u_local
+
+    def forward(self, x, t):
+        u_total, _, _ = self._compute_components(x, t)
+        return u_total
+
+    def forward_components(self, x, t):
+        """Diagnostic-only: returns (u_total, u_RF, u_local) from a single
+        forward pass, without duplicating the RF/local computation."""
+        return self._compute_components(x, t)
