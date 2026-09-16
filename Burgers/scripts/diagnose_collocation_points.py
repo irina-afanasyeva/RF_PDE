@@ -11,12 +11,13 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 if str(PROJECT_DIR) not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR))
 
-from burgers_rf.config import M_TRAIN, SEED, set_seed  # noqa: E402
+from burgers_rf.config import DTYPE, M_TRAIN, SEED, set_seed  # noqa: E402
 from burgers_rf.data import sample_training_points  # noqa: E402
 
 SHOCK_HALF_WIDTH = 0.02
@@ -33,6 +34,7 @@ def expected_count(half_width, n_total):
 
 
 def main():
+    torch.set_default_dtype(DTYPE)
     set_seed(SEED)
     x_train, t_train = sample_training_points(M_TRAIN, "cpu")
     x = x_train.detach().numpy().reshape(-1)
