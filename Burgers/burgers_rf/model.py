@@ -20,11 +20,16 @@ class BurgersRF(nn.Module):
         local_center=0.0,
         local_width=0.05,
         local_widths=None,
+        local_time_mode="standard",
         device=None,
     ):
         super(BurgersRF, self).__init__()
         self.use_local = use_local
         self.local_type = local_type
+
+        if local_time_mode not in ("standard", "ic_compatible"):
+            raise ValueError(f"Unsupported local_time_mode: {local_time_mode}")
+        self.local_time_mode = local_time_mode
 
         if x_dist == "Gaussian":
             self.Wx = nn.Parameter(torch.randn(1, Nx) / sigma_x, requires_grad=False).to(device)
@@ -51,6 +56,10 @@ class BurgersRF(nn.Module):
             elif local_type == "gaussian_sum":
                 if not local_widths:
                     raise ValueError("local_widths must be provided for local_type='gaussian_sum'")
+                if local_time_mode != "standard":
+                    raise NotImplementedError(
+                        "local_time_mode='ic_compatible' is not implemented for local_type='gaussian_sum'"
+                    )
                 self.local_feature = GaussianSumLocal(center=local_center, widths=local_widths)
                 self.local_coefficients = nn.Parameter(torch.zeros(Nt, len(local_widths)))
             else:
@@ -68,7 +77,12 @@ class BurgersRF(nn.Module):
         u_rf = self.model(result_einsum)
         if self.use_local:
             if self.local_type == "gaussian":
-                u_local = self.local_feature(x) * (phi_t @ self.local_coefficients)
+                if self.local_time_mode == "standard":
+                    temporal = phi_t @ self.local_coefficients
+                else:  # ic_compatible: u_local(x,0) == 0 identically for every local_coefficients
+                    phi_t0 = torch.cos(self.bt)
+                    temporal = (phi_t - phi_t0) @ self.local_coefficients
+                u_local = self.local_feature(x) * temporal
             else:  # gaussian_sum
                 basis = self.local_feature(x)
                 temporal = phi_t @ self.local_coefficients
