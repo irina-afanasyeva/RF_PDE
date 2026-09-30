@@ -27,7 +27,7 @@ class BurgersRF(nn.Module):
         self.use_local = use_local
         self.local_type = local_type
 
-        if local_time_mode not in ("standard", "ic_compatible"):
+        if local_time_mode not in ("standard", "ic_compatible", "linear_t"):
             raise ValueError(f"Unsupported local_time_mode: {local_time_mode}")
         self.local_time_mode = local_time_mode
 
@@ -52,13 +52,16 @@ class BurgersRF(nn.Module):
         if self.use_local:
             if local_type == "gaussian":
                 self.local_feature = GaussianLocal(center=local_center, width=local_width)
-                self.local_coefficients = nn.Parameter(torch.zeros(Nt, 1))
+                if local_time_mode == "linear_t":
+                    self.local_coefficients = nn.Parameter(torch.zeros(1))
+                else:
+                    self.local_coefficients = nn.Parameter(torch.zeros(Nt, 1))
             elif local_type == "gaussian_sum":
                 if not local_widths:
                     raise ValueError("local_widths must be provided for local_type='gaussian_sum'")
                 if local_time_mode != "standard":
                     raise NotImplementedError(
-                        "local_time_mode='ic_compatible' is not implemented for local_type='gaussian_sum'"
+                        f"local_time_mode='{local_time_mode}' is not implemented for local_type='gaussian_sum'"
                     )
                 self.local_feature = GaussianSumLocal(center=local_center, widths=local_widths)
                 self.local_coefficients = nn.Parameter(torch.zeros(Nt, len(local_widths)))
@@ -79,9 +82,12 @@ class BurgersRF(nn.Module):
             if self.local_type == "gaussian":
                 if self.local_time_mode == "standard":
                     temporal = phi_t @ self.local_coefficients
-                else:  # ic_compatible: u_local(x,0) == 0 identically for every local_coefficients
+                elif self.local_time_mode == "ic_compatible":
+                    # u_local(x,0) == 0 identically for every local_coefficients
                     phi_t0 = torch.cos(self.bt)
                     temporal = (phi_t - phi_t0) @ self.local_coefficients
+                else:  # linear_t: u_local(x,0) == 0 identically since temporal = d*t
+                    temporal = self.local_coefficients * t
                 u_local = self.local_feature(x) * temporal
             else:  # gaussian_sum
                 basis = self.local_feature(x)
