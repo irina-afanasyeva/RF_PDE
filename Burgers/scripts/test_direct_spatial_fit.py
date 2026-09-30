@@ -230,17 +230,18 @@ def write_summary(experiment_name, rows):
             f.write("\n")
 
 
-def shared_ylim(plot_data_by_sigma, keys):
-    vals = []
-    for sigma_local in SIGMAS_LOCAL:
-        pd = plot_data_by_sigma[sigma_local]
-        for key in keys:
-            vals.append(pd[key])
-    all_vals = np.concatenate(vals)
-    return float(all_vals.min()), float(all_vals.max())
+def solution_ylim(pd, keys):
+    """Y-axis range determined ONLY by the physically relevant series (the
+    keys passed in -- reference / RF-only / RF+Gaussian total), never by the
+    separate RF-part/local decomposition components, and never pooled across
+    different sigma values. A small margin is added for readability."""
+    vals = np.concatenate([pd[k] for k in keys])
+    lo, hi = float(vals.min()), float(vals.max())
+    margin = 0.05 * (hi - lo) if hi > lo else 1.0
+    return lo - margin, hi + margin
 
 
-def plot_full_domain(experiment_name, sigma_local, pd, ylim):
+def plot_full_domain(experiment_name, sigma_local, pd):
     fig, ax = plt.subplots(figsize=(9, 6))
     x = pd["x_eval_full"]
     ax.plot(x, pd["y_eval_full"], label="reference (Cole-Hopf / Gauss-Hermite)", linewidth=2, color="k")
@@ -250,7 +251,7 @@ def plot_full_domain(experiment_name, sigma_local, pd, ylim):
     ax.plot(x, pd["y_pred_full_aug"], label="RF+Gaussian total", linestyle="-")
     ax.set_xlabel("x")
     ax.set_ylabel(f"u(x, t={T_SNAPSHOT})")
-    ax.set_ylim(ylim)
+    ax.set_ylim(solution_ylim(pd, ["y_eval_full", "y_pred_full_rf", "y_pred_full_aug"]))
     ax.set_title(f"{experiment_name}: sigma_local={sigma_local}, full domain")
     ax.legend(fontsize=8)
     fig.tight_layout()
@@ -258,7 +259,7 @@ def plot_full_domain(experiment_name, sigma_local, pd, ylim):
     plt.close(fig)
 
 
-def plot_shock_zoom(experiment_name, sigma_local, pd, ylim):
+def plot_shock_zoom(experiment_name, sigma_local, pd):
     fig, ax = plt.subplots(figsize=(9, 6))
     x = pd["x_eval_shock"]
     ax.plot(x, pd["y_eval_shock"], label="reference", linewidth=2, color="k")
@@ -268,11 +269,33 @@ def plot_shock_zoom(experiment_name, sigma_local, pd, ylim):
     ax.plot(x, pd["y_pred_shock_aug"], label="RF+Gaussian total", linestyle="-")
     ax.set_xlabel("x")
     ax.set_ylabel(f"u(x, t={T_SNAPSHOT})")
-    ax.set_ylim(ylim)
+    ax.set_ylim(solution_ylim(pd, ["y_eval_shock", "y_pred_shock_rf", "y_pred_shock_aug"]))
     ax.set_title(f"{experiment_name}: sigma_local={sigma_local}, shock zoom |x|<=0.02")
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(OUTPUT_DIR / f"{experiment_name}_sigma{sigma_local}_shock.png")
+    plt.close(fig)
+
+
+def plot_component_scale_diagnostic(experiment_name, sigma_local, pd):
+    """Separate, auto-scaled diagnostic showing the RF-part/local decomposition
+    on their OWN natural scale -- kept apart from the main solution-comparison
+    plots so a numerically non-identifiable case (e.g. sigma=0.20, where the
+    Gaussian column is nearly redundant with the RF span) cannot distort them."""
+    fig, ax = plt.subplots(figsize=(9, 6))
+    x = pd["x_eval_full"]
+    ax.plot(x, pd["rf_part_full"], label="RF part of augmented fit", linestyle="-.")
+    ax.plot(x, pd["local_full"], label="local contribution d*G", linestyle=":")
+    ax.set_xlabel("x")
+    ax.set_ylabel("component value (own scale)")
+    ax.set_title(
+        f"{experiment_name}: sigma_local={sigma_local}, component-scale diagnostic "
+        f"(max|RF part|={np.abs(pd['rf_part_full']).max():.3e}, "
+        f"max|local|={np.abs(pd['local_full']).max():.3e})"
+    )
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIR / f"{experiment_name}_sigma{sigma_local}_component_scale.png")
     plt.close(fig)
 
 
@@ -357,17 +380,11 @@ def main():
 
         write_summary(experiment_name, rows)
 
-        full_ylim = shared_ylim(
-            plot_data_by_sigma,
-            ["y_eval_full", "y_pred_full_rf", "rf_part_full", "local_full", "y_pred_full_aug"],
-        )
-        shock_ylim = shared_ylim(
-            plot_data_by_sigma,
-            ["y_eval_shock", "y_pred_shock_rf", "rf_part_shock", "local_shock", "y_pred_shock_aug"],
-        )
         for sigma_local in SIGMAS_LOCAL:
-            plot_full_domain(experiment_name, sigma_local, plot_data_by_sigma[sigma_local], full_ylim)
-            plot_shock_zoom(experiment_name, sigma_local, plot_data_by_sigma[sigma_local], shock_ylim)
+            pd = plot_data_by_sigma[sigma_local]
+            plot_full_domain(experiment_name, sigma_local, pd)
+            plot_shock_zoom(experiment_name, sigma_local, pd)
+            plot_component_scale_diagnostic(experiment_name, sigma_local, pd)
 
         plot_compact_summary(experiment_name, rows)
 
