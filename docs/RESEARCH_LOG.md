@@ -468,8 +468,7 @@ corrections per grid point: fixed `+G`, fixed `-G` (no fitting), and the
 closed-form least-squares-optimal scalar amplitude
 `d* = <q, u_true - u_RF> / <q,q>` (not training, not an optimizer). Baseline
 reused unchanged from Section 9. Script:
-`Burgers/scripts/test_fixed_gaussian_correction.py` (uncommitted at time of
-documentation reconstruction).
+`Burgers/scripts/test_fixed_gaussian_correction.py` (62156ef).
 
 **Baseline (same as Section 9):** global .0823820, smooth .0484601, shock
 .366923.
