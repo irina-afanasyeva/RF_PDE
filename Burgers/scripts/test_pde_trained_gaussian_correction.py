@@ -29,7 +29,7 @@ import test_fixed_gaussian_correction as tfgc  # noqa: E402 -- reused unchanged:
 # fit." This first controlled comparison is performed ONLY at t=1, changing
 # exactly one variable (the source of u_RF) relative to the Sept-30 result.
 
-CHECKPOINT_PATH = PROJECT_DIR / "outputs" / "pde_trained_rf_residual" / "checkpoint.pt"
+CHECKPOINT_PATH = PROJECT_DIR / "outputs" / "pde_trained_rf_residual" / "checkpoint_complete.pt"
 CANONICAL_GLOBAL = 0.27149430095802507
 CANONICAL_SHOCK = 0.8390487998889169
 VERIFY_RTOL = 1e-4
