@@ -14,14 +14,31 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 2. **Shifted Gaussian features.** Motivated by the Section 13 finding in
    `RESEARCH_LOG.md`: allow `center != 0`.
 
-3. **Two shifted Gaussians, opposite-signed.** If the PDE-trained residual
-   turns out to have two lobes of opposite sign (as the direct-fit
-   correlation heatmap's near-antisymmetric structure around `c=0`
-   suggested for the direct-fit residual), a pair of off-center Gaussians
-   might represent it better than one.
+3. **Two shifted Gaussians, opposite-signed (now the primary next
+   direction).** `RESEARCH_LOG.md` Section 15 confirms the PDE-trained RF
+   residual has a two-lobe, sign-changing structure around the shock
+   (positive on the left, negative on the right at `t=1`), and Section 19
+   shows a single shifted Gaussian corrects only one (right-hand) lobe.
+   Natural next candidate, consistent with the Sept-30 advisor discussion:
 
-4. **Derivative-of-Gaussian feature**, if the residual turns out to be
-   antisymmetric rather than well-matched by a symmetric bump.
+       u_local(x,t) = d1(t) G1(x;c1,sigma1) + d2(t) G2(x;c2,sigma2)
+
+   with potentially opposite-signed amplitudes. The immediate question is
+   **not yet** how to train `d1, d2` — first determine post-hoc (no PDE
+   retraining) whether this two-Gaussian spatial basis can explain
+   substantially more of the fixed PDE-trained RF residual than one
+   Gaussian can (see `TODO.md` Task 1). Kept as the primary direction here
+   because it follows directly from both the advisor's suggestion and the
+   observed residual data, not just from speculation about the direct-fit
+   residual's shape.
+
+4. **Derivative-of-Gaussian feature — secondary interpretation.** A pair of
+   oppositely-signed shifted Gaussians (item 3) can itself resemble an odd,
+   derivative-like localized correction, consistent with the confirmed
+   two-lobe residual shape. Keep this as a secondary future interpretation
+   of the item-3 result, not a separate experiment to run first — item 3
+   remains the primary direction since it follows directly from the
+   advisor's Sept-30 suggestion and the observed data.
 
 5. **Moving local feature**, `center(t) = s(t)`, potentially also
    `sigma(t)` — raised at the 08/26 meeting, not yet tested in a controlled

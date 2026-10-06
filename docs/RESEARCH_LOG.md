@@ -513,4 +513,215 @@ PDE-trained RF model — the caveat above applies.
 the PDE-trained RF solution** — as opposed to the error left by the
 direct-fit RF approximation used in Sections 9 and 13?
 
-This is the open question carried into `TODO.md`.
+This is the open question carried into `TODO.md`. (Answered in part by
+Sections 15–19 below; see Section 20 for the updated question.)
+
+---
+
+## 15. PDE-trained RF baseline and residual diagnostic
+
+**Hypothesis.** Resuming `TODO.md` Task 1: before designing any new local
+feature, analyze the residual `e_RF(x,t) = u_true(x,t) - u_RF(x,t)` of the
+*actual PDE-trained* RF baseline — not the direct-fit approximation used in
+Sections 9 and 13.
+
+**Experiment.** Reproduced the seed-42 RF-only baseline (`use_local=False`)
+via the existing, unmodified training path, saved a checkpoint, and
+inspected the residual on a dense 4001-point grid at `t = 0.25, 0.5, 0.75,
+1.0`. Script: `Burgers/scripts/test_pde_trained_rf_baseline.py` (`5c29cd3`).
+
+**Result — canonical multi-time metrics** (consistent with Section 0's
+global/shock numbers, now with the smooth split also confirmed):
+```
+global = 0.27149430095802507
+smooth = 0.2443827084159696
+shock  = 0.8390487998889169
+```
+
+**Result — residual structure.** At later times the residual develops a
+localized, sign-changing structure straddling the shock: positive on the
+left, negative on the right. At `t=1`:
+```
+max positive residual ≈ +0.36925 at x ≈ -0.0145
+min negative residual ≈ -0.59707 at x ≈ +0.0135
+```
+
+**Interpretation.** This two-lobe, odd-ish residual shape around the shock
+means a single **centered, even** Gaussian cannot represent the complete
+sign-changing correction by itself. A single Gaussian has one sign (up to
+its scalar amplitude), so it cannot simultaneously reproduce the
+positive-left and negative-right residual lobes. It can therefore provide
+only a partial correction to this sign-changing structure. This directly
+motivates testing a *shifted* Gaussian (Section 17) and, ultimately, a
+*pair* of Gaussians (Section 20 / `TODO.md`).
+
+---
+
+## 16. Checkpoint reconstruction — missing Wx/Wt/bx/bt
+
+**Discovery.** The checkpoint saved by Section 15's script on the GPU server
+contained only `model.0.weight` (the trained `c_ij` coefficients) — `Wx`,
+`Wt`, `bx`, `bt` (the fixed random spatial/temporal frequencies and biases)
+were absent from `state_dict()`.
+
+**Root cause.** `model.py` constructs these fixed tensors with the pattern
+`nn.Parameter(...).to(device)`. Calling `.to(device)` directly on an
+`nn.Parameter` instance is a no-op (type preserved) when no actual
+conversion is needed, but constructs a **plain `torch.Tensor`** (silently
+losing the `Parameter` wrapper) when a genuine conversion occurs — which
+happens on the GPU server (`device='cuda:0'`) but not on CPU-only machines.
+Since this conversion happens *inside* `__init__`, before
+`nn.Module.__setattr__` ever sees these as `Parameter` instances, they are
+never registered in `self._parameters` on CUDA, hence absent from
+`state_dict()`. **This affects checkpoint completeness only — not the
+forward computation or the validity of any previous training run**:
+`Wx/Wt/bx/bt` still held their correct, deterministically-seeded values and
+were used correctly throughout training (`requires_grad=False`, never meant
+to be optimized; this was simply the first experiment to rely on
+`state_dict()` completeness).
+
+**Reconstruction.** Reproduced the exact pre-model RNG sequence from the
+checkpoint's own recorded seed/config metadata:
+```
+set_seed(42)
+sample_training_points(M_TRAIN=3600, device="cpu")
+BurgersRF(NX=500, NT=10, SIGMA_X=0.04, SIGMA_T=1/3, use_local=False, device="cpu")
+```
+then loaded *only* the saved `model.0.weight` on top — `Wx/Wt/bx/bt` were
+never loaded from the checkpoint, only reconstructed from the seed. Script:
+`Burgers/scripts/reconstruct_pde_trained_rf_checkpoint.py` (`e7deefa`).
+
+**Verification.** Recomputed canonical metrics matched the Section 15
+values essentially to machine precision:
+```
+global = 0.271494300958025   (canonical 0.27149430095802507)
+smooth = 0.2443827084159696  (canonical 0.2443827084159696)
+shock  = 0.8390487998889169  (canonical 0.8390487998889169)
+```
+A complete checkpoint was saved (original left untouched) at:
+```
+Burgers/outputs/pde_trained_rf_residual/checkpoint_complete.pt
+```
+containing `Wx, Wt, bx, bt, model.0.weight`.
+`Burgers/scripts/test_pde_trained_gaussian_correction.py` was updated to
+load this complete checkpoint instead (`2fa4a91`).
+
+**Follow-up (not yet done, tracked in `TODO.md`):** fixing the underlying
+`nn.Parameter(...).to(device)` registration pattern in `model.py`. This does
+**not** retroactively invalidate any previous numerical result in this log —
+it only affects checkpoint persistence on CUDA, not the forward computation
+any experiment actually used.
+
+---
+
+## 17. PDE-trained single-Gaussian correction diagnostic
+
+**Hypothesis.** Repeat the Section 13 shifted/scaled Gaussian correction
+search, but against the *actual* PDE-trained RF (Section 15/16's
+reconstructed, complete checkpoint) instead of the direct least-squares fit
+— directly addressing the Sept-30 advisor instruction "take u_RF from
+training, not direct fit."
+
+**Experiment.** Same center/sigma grids and closed-form amplitude fitting as
+Section 13 (`c = linspace(-0.02,0.02,21)`, `sigma =
+logspace(log10(1e-4),log10(3e-1),25)`), evaluated at `t=1` only. Script:
+`Burgers/scripts/test_pde_trained_gaussian_correction.py` (`2fa4a91`).
+
+**IMPORTANT metric distinction:** `0.8390488` (Sections 0/15) is the
+**canonical multi-time** shock metric. The **t=1-only, fine-grid** baseline
+used for this Gaussian-correction comparison (matching Section 13's own
+grid convention) is a *different*, smaller number:
+```
+global = 0.22924198524509445
+smooth = 0.186308682793358
+shock  = 0.7597470709454747
+```
+
+**Result — best shock-optimal single Gaussian:**
+```
+c = +0.014, sigma = 0.007646112, d_star_shock = -0.6578595
+corrected: global = 0.181670, smooth = 0.169661, shock = 0.396438
+improvement: global ≈ 20.75%, shock ≈ 47.82%
+max |corr_shock| = -0.853067, at the same (c, sigma)
+```
+
+**Result — global-optimal:**
+```
+c = +0.020, sigma = 0.01490050, d_star_global = -0.5812977
+global error = 0.166632   (≈27.31% improvement)
+```
+`c=+0.020` is the **edge of the searched center range**
+(`linspace(-0.02,0.02,21)`) — this must **not** be read as a confirmed
+global optimum; it may simply reflect the grid boundary, and a wider center
+search would be needed to check whether the true optimum lies further out.
+
+---
+
+## 18. Comparison: direct-fit vs. PDE-trained single-Gaussian correction
+
+| | direct-fit RF (Section 13) | PDE-trained RF (Section 17) |
+|---|---|---|
+| `c*` | +0.010 | +0.014 |
+| `sigma*` | 0.005477 | 0.007646 |
+| `d*_shock` | -0.2835 | -0.6579 |
+| baseline shock | 0.366923 | 0.759747 |
+| corrected shock | 0.265913 | 0.396438 |
+| shock improvement | ≈27.5% | ≈47.82% |
+| correlation magnitude (`corr_shock`) | ≈0.689 | ≈0.853 |
+
+**Interpretation.** The shifted-Gaussian correction remains useful — and is
+*more strongly aligned* with the residual (higher correlation, larger
+improvement) — when the actual PDE-trained RF is used instead of the
+direct-fit approximation. **Therefore, the earlier failure of the local
+coefficient to activate during joint PDE training (Sections 1–12) cannot be
+explained simply by saying that a Gaussian provides no useful correction to
+the PDE-trained RF** — post-hoc, it clearly can.
+
+---
+
+## 19. Figure-based interpretation — large L2 improvement vs. incomplete shock reconstruction
+
+Visual inspection of the Section 17 full-domain and shock-zoom plots adds an
+important nuance not visible from the error numbers alone.
+
+The single Gaussian produces a large L2 error reduction, but it does **not**
+reconstruct the complete shock profile. Because the optimal Gaussian is
+narrow and centered at `x=+0.014` with **negative** amplitude, it creates a
+localized negative correction on the **right side** of the shock. In the
+full-domain plot, the corrected solution makes a localized downward
+excursion near the shock and then rapidly returns to the original RF curve
+once the Gaussian decays — this is expected from the Gaussian's
+localization and is **not a plotting artifact**.
+
+The shock-zoom figure shows:
+- the correction substantially improves the negative/right-hand residual
+  lobe;
+- the positive/left-hand residual remains largely uncorrected;
+- the corrected curve therefore still does not reproduce the entire steep
+  shock transition.
+
+The correlation heatmap supports the same reading: a positive-correlation
+region for Gaussians centered on the negative-`x` side, and a strong
+negative-correlation region for Gaussians centered on the positive-`x` side
+(matching Section 17's negative `d*`) — the best single Gaussian simply
+selects the stronger of the two (the negative/right-hand lobe).
+
+**Conclusion (phrased carefully):** *The single shifted Gaussian contains a
+strongly useful correction direction, but one Gaussian is structurally
+insufficient to represent the complete sign-changing shock residual.* It
+would be incorrect to say "the Gaussian solves the shock."
+
+---
+
+## 20. Updated central question
+
+Section 14's question — what local spatial structure is required by the
+PDE-trained RF's residual — has now been partially answered (Sections
+15–19): the residual has a two-lobe, sign-changing structure, and a single
+shifted Gaussian can capture roughly one lobe, giving a substantial but
+incomplete correction.
+
+**Updated question carried into `TODO.md`:** can a **pair** of shifted
+Gaussians (one per lobe) represent substantially more of the fixed
+PDE-trained RF residual than one Gaussian can — tested post-hoc, before any
+new PDE training is attempted?

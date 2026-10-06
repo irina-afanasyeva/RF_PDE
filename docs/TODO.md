@@ -5,69 +5,61 @@ reasoning behind each item; this file tracks priority and status only.
 
 ## Current priority
 
-**1. Analyze the actual PDE-trained RF residual.**
+**1. Two-Gaussian post-hoc diagnostic on the fixed PDE-trained RF.**
 
-Everything in Sections 9 and 13 of `RESEARCH_LOG.md` (direct spatial-fit
-diagnostics, including the shifted/scaled Gaussian result) used the
-*direct least-squares-fitted* RF approximation at `t=1`, **not** the actual
-PDE-trained RF solution. This is the critical caveat carried over from the
-09/30 meeting and must be resolved before designing any new local feature.
-
-Obtain/save the actual RF-only prediction from a real Burgers PDE-training
-run, and study
+No PDE retraining yet. `RESEARCH_LOG.md` Section 15 confirmed the
+PDE-trained RF residual has a two-lobe, sign-changing structure around the
+shock (positive on the left, negative on the right at `t=1`), and Section
+19 showed that a single shifted Gaussian only corrects one (right-hand)
+lobe, leaving the other largely untouched. Test whether a pair
 
 ```
-e_RF(x,t) = u_true(x,t) - u_RF(x,t)
+u_local(x,t) = d1(t) G1(x;c1,sigma1) + d2(t) G2(x;c2,sigma2)
 ```
 
-For several times, visualize:
-- u_true
-- u_RF
-- the residual e_RF
-- a zoomed view near the shock
+(centers/widths searched, amplitudes analytically optimal, same closed-form
+approach as Sections 13/17) can represent substantially more of the fixed
+residual than one Gaussian — same post-hoc, non-training diagnostic style
+as Section 17.
 
-Questions to answer:
-- Is the residual symmetric or antisymmetric around the shock?
-- Does it have positive/negative lobes?
-- Does the residual's effective center move with time?
-- Does its width change with time?
-- Does the shape look like one Gaussian, two Gaussians, a derivative-of-
-  Gaussian, or something else?
-
-**This is diagnostic only — do not modify training yet.**
+**Do not treat the Section 17 single-Gaussian optimum (`c=0.014,
+sigma=0.007646`) as parameters to train directly** — those are the optimum
+for a single post-hoc Gaussian fit against the fixed PDE-trained residual,
+not yet established as the correct local basis to train with.
 
 ## Next
 
-**2. Fit Gaussian corrections to the PDE-trained RF residual.**
+**2. Use the two-Gaussian spatial-basis evidence to design the next
+PDE-training experiment.**
 
-For selected times, search center and sigma and analytically compute the
-optimal amplitude `d*` (same closed-form approach as Section 13, applied to
-the PDE-trained residual instead of the direct-fit residual). Record
-`c*(t)`, `sigma*(t)`, `d*(t)`.
+Only after Task 1 establishes whether/how much of the residual a
+two-Gaussian basis explains, and with centers/widths justified by that
+evidence (not assumed from the single-Gaussian search alone). Change
+exactly one factor at a time relative to the current baseline; keep RF
+realization, collocation set, optimizer, initialization, and training
+duration controlled, matching the established controlled-experiment
+convention used throughout `RESEARCH_LOG.md`.
 
-**3. Controlled shifted-center PDE experiment.**
-
-Only after Tasks 1–2 justify it. Change exactly one factor: local-feature
-`center=0` vs. the diagnosed `c*`. Keep RF realization, width, collocation
-set, optimizer, initialization, and training duration controlled, matching
-the established controlled-experiment convention used throughout
-`RESEARCH_LOG.md`.
-
-**4. Multiple shifted Gaussians.**
-
-Only if the residual structure from Task 1 justifies it (e.g. two
-opposite-signed lobes).
-
-**5. Trainable Gaussian parameters (center, width).**
+**3. Trainable Gaussian parameters (center, width).**
 
 Later, after the fixed-parameter diagnostics above.
 
-**6. Two-stage RF + local training.**
+**4. Two-stage RF + local training.**
 
 Stage 1: train the RF term alone. Stage 2: freeze or partially freeze the
 RF term and train the local correction against the resulting residual.
 
-**7. Increase RF feature count as a separate RF-only diagnostic.**
+**5. Separate implementation task: fix `nn.Parameter(...).to(device)`
+registration in `model.py`.**
+
+Root cause documented in `RESEARCH_LOG.md` Section 16 — on CUDA,
+`.to(device)` silently downgrades `Wx/Wt/bx/bt` from `Parameter` to plain
+`Tensor`, so they are absent from `state_dict()` on GPU-trained checkpoints.
+Does not affect training correctness (these tensors have
+`requires_grad=False` and were used correctly throughout), only checkpoint
+completeness — not urgent, but should not be forgotten.
+
+**6. Increase RF feature count as a separate RF-only diagnostic.**
 
 Investigate whether the Gibbs-like oscillation/overshoot near the shock
 (visible after the Section 9 plotting fix) is a feature-count/conditioning
@@ -105,6 +97,21 @@ Multi-seed validation (not before — single-seed results throughout
   refined: a shifted, optimally-scaled Gaussian recovers ~20–27% of the
   *direct-fit* residual, but this has not yet been shown for the
   PDE-trained residual.
+- Analyzed the actual PDE-trained RF baseline and residual
+  (`RESEARCH_LOG.md` Section 15) — residual has a two-lobe, sign-changing
+  structure around the shock (positive left, negative right at `t=1`); a
+  centered, even Gaussian cannot represent this by itself.
+- Diagnosed and reconstructed the missing `Wx/Wt/bx/bt` checkpoint issue
+  (Section 16) — training itself was unaffected; a complete checkpoint now
+  exists (`checkpoint_complete.pt`); the underlying `model.py` fix is
+  tracked separately above (Task 5).
+- Single-Gaussian parameter search/correction on the fixed PDE-trained RF at
+  `t=1` (Sections 17–19) — large L2 improvement (shock ≈47.8%) and
+  stronger residual alignment than the earlier direct-fit result, but
+  visual inspection shows the correction is structurally incomplete: it
+  corrects only the right-hand residual lobe, leaving the left-hand lobe
+  uncorrected. One Gaussian is not sufficient to reconstruct the full shock
+  transition.
 
 ## Workflow
 
