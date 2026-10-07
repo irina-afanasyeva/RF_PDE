@@ -9,36 +9,38 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 1. **Residual-driven local basis design.** The local feature should be
    designed to approximate `u_true - u_RF` (the actual PDE-trained
    residual), not necessarily to resemble `u_true` or the physical shock
-   shape itself. This reframing follows directly from `TODO.md` Task 1.
+   shape itself. This reframing follows directly from the residual analysis
+   in `RESEARCH_LOG.md` Section 15.
 
 2. **Shifted Gaussian features.** Motivated by the Section 13 finding in
    `RESEARCH_LOG.md`: allow `center != 0`.
 
-3. **Two shifted Gaussians, opposite-signed (now the primary next
-   direction).** `RESEARCH_LOG.md` Section 15 confirms the PDE-trained RF
-   residual has a two-lobe, sign-changing structure around the shock
-   (positive on the left, negative on the right at `t=1`), and Section 19
-   shows a single shifted Gaussian corrects only one (right-hand) lobe.
-   Natural next candidate, consistent with the Sept-30 advisor discussion:
+3. **Two shifted Gaussians, opposite-signed — strong future representation
+   idea (no longer the immediate next experiment).** `RESEARCH_LOG.md`
+   Section 15 confirms the PDE-trained RF residual has a two-lobe,
+   sign-changing structure around the shock (positive on the left, negative
+   on the right at `t=1`), and Section 19 shows a single shifted Gaussian
+   corrects only one (right-hand) lobe. Natural future candidate,
+   consistent with the Sept-30 advisor discussion:
 
        u_local(x,t) = d1(t) G1(x;c1,sigma1) + d2(t) G2(x;c2,sigma2)
 
-   with potentially opposite-signed amplitudes. The immediate question is
-   **not yet** how to train `d1, d2` — first determine post-hoc (no PDE
-   retraining) whether this two-Gaussian spatial basis can explain
-   substantially more of the fixed PDE-trained RF residual than one
-   Gaussian can (see `TODO.md` Task 1). Kept as the primary direction here
-   because it follows directly from both the advisor's suggestion and the
-   observed residual data, not just from speculation about the direct-fit
-   residual's shape.
+   with potentially opposite-signed amplitudes. Sections 21–25 found a more
+   urgent prior question, however: even a single, correctly-signed local
+   Gaussian only weakly activates under the current PDE training objective
+   (two-stage frozen-RF training reached only `d≈-0.01`, far short of the
+   `d≈-0.66` to `-1.11` that would actually reduce solution error). Adding a
+   second Gaussian does not obviously address that magnitude problem, so
+   `TODO.md` now prioritizes understanding the amplitude limitation first;
+   G1+G2 remains a strong candidate for the separate *representation*
+   question (whether one-sided correction is enough at all) once that is
+   understood. **Not yet tested, post-hoc or otherwise.**
 
 4. **Derivative-of-Gaussian feature — secondary interpretation.** A pair of
    oppositely-signed shifted Gaussians (item 3) can itself resemble an odd,
    derivative-like localized correction, consistent with the confirmed
    two-lobe residual shape. Keep this as a secondary future interpretation
-   of the item-3 result, not a separate experiment to run first — item 3
-   remains the primary direction since it follows directly from the
-   advisor's Sept-30 suggestion and the observed data.
+   of item 3, not a separate experiment to prioritize on its own.
 
 5. **Moving local feature**, `center(t) = s(t)`, potentially also
    `sigma(t)` — raised at the 08/26 meeting, not yet tested in a controlled
@@ -46,8 +48,17 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 
 6. **Trainable center and width** (as opposed to fixed, swept values).
 
-7. **Two-stage / residual training** (train RF, then freeze and fit the
-   local term against the resulting residual) — see `TODO.md` Task 6.
+7. **Two-stage / residual training — experimentally supported, worth
+   retaining as a diagnostic strategy.** Train the RF term first (already
+   done, canonical checkpoint), then freeze it and train the local term
+   against the resulting residual. `RESEARCH_LOG.md` Section 24 ran exactly
+   this for the `linear_t` shifted Gaussian: it confirmed RF/local
+   co-adaptation as a real effect (joint training learns the wrong sign;
+   frozen-RF training learns the sign the fixed-RF objective itself
+   predicts) and modestly improved the solution. The remaining limitation
+   is magnitude, not sign (Section 25) — this strategy diagnoses
+   co-adaptation well but has not by itself produced a large accuracy
+   improvement.
 
 8. **Error-dependent local activation.** An "error-dependent" or
    "reciprocal" idea appears in handwritten notes from the 09/30 meeting.
@@ -62,7 +73,7 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 
 10. **Increasing RF capacity** (more spatial/temporal random features), to
     address the Gibbs-like oscillation near the shock noted after the
-    Section 9 plotting fix — see `TODO.md` Task 7.
+    Section 9 plotting fix — see `TODO.md`.
 
 11. **Alternative local bases**: tanh transition, derivative-of-Gaussian,
     Gaussian pairs, compactly supported bases, possibly a small learned
@@ -84,6 +95,32 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 
 15. **Multi-seed robustness** — see `TODO.md`, after a promising model is
     found.
+
+16. **Conceptual distinctions clarified by `RESEARCH_LOG.md` Sections
+    21–25.** Several previously conflated questions turned out to be
+    separate and must be evaluated independently for any local feature:
+    - *activation* — does the local coefficient move away from zero at all?
+    - *sign/direction* — does it move in the direction that would actually
+      reduce error?
+    - *amplitude* — does it move far enough to matter, given the training
+      objective's own optimum?
+    - *representation capacity* — can the chosen local basis (e.g. one
+      Gaussian) represent the needed correction shape at all?
+    - *co-adaptation* — does joint optimization of the RF and local terms
+      together change the outcome relative to training the local term
+      against a fixed RF?
+    A local feature can activate strongly with the wrong sign (Section 21),
+    or activate weakly but with the correct sign (Section 24) — these are
+    different failure modes requiring different fixes.
+
+17. **`WEIGHT_DECAY=1` suppressing the local amplitude — hypothesis, not a
+    conclusion.** Vanilla `Adam`'s weight decay (not decoupled, unlike
+    `AdamW`) adds `weight_decay*param` directly to the gradient, in
+    proportion to the parameter's own current magnitude — plausible as one
+    contributor to why two-stage training (Section 24) reached only
+    `d≈-0.01` instead of a solution-error-reducing `d≈-0.66` or beyond.
+    This has **not** been tested in a controlled experiment and must not be
+    treated as established; see `TODO.md`.
 
 ## Ideas already tested — evidence against (do not re-attempt without new reasoning)
 

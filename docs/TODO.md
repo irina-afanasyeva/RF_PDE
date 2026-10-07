@@ -5,51 +5,63 @@ reasoning behind each item; this file tracks priority and status only.
 
 ## Current priority
 
-**1. Two-Gaussian post-hoc diagnostic on the fixed PDE-trained RF.**
+**1. Investigate why the fixed-RF PDE training objective permits only a
+small negative local amplitude, despite larger solution-error improvement
+being possible.**
 
-No PDE retraining yet. `RESEARCH_LOG.md` Section 15 confirmed the
-PDE-trained RF residual has a two-lobe, sign-changing structure around the
-shock (positive on the left, negative on the right at `t=1`), and Section
-19 showed that a single shifted Gaussian only corrects one (right-hand)
-lobe, leaving the other largely untouched. Test whether a pair
+`RESEARCH_LOG.md` Section 23 (fixed-RF sweep): the PDE-training objective's
+own optimum is `d*≈-0.01`, while solution-error optima prefer `d*≈-0.66` to
+`-1.11` depending on the metric. Section 24 (two-stage training) confirmed
+Adam actually reaches `d≈-0.0105` when the RF is frozen — matching the
+fixed-RF prediction almost exactly — but this barely improves the solution
+(canonical shock error `0.8390488 → 0.8348522`). This is now the central
+open question (Section 25).
 
-```
-u_local(x,t) = d1(t) G1(x;c1,sigma1) + d2(t) G2(x;c2,sigma2)
-```
+**2. A controlled `WEIGHT_DECAY` diagnostic is a plausible simple next
+test.**
 
-(centers/widths searched, amplitudes analytically optimal, same closed-form
-approach as Sections 13/17) can represent substantially more of the fixed
-residual than one Gaussian — same post-hoc, non-training diagnostic style
-as Section 17.
+Inspect/discuss the exact mechanism before implementing anything. Vanilla
+`Adam`'s weight decay (not decoupled, unlike `AdamW`) adds
+`weight_decay*param` directly to the gradient, in proportion to the
+parameter's own current magnitude — plausible as one contributor to the
+small amplitude above. **Do not assume this is the cause** — it is one
+candidate among several (`RESEARCH_LOG.md` Section 25, `IDEAS.md` item 17).
+
+## Next
+
+**3. Investigate the structure/conditioning of the PDE residual near the
+shock**, as a possible explanation for why the training objective tolerates
+only a small local-correction magnitude.
+
+**4. Consider two-stage training with a richer local representation** (e.g.
+two Gaussians, trainable center/width) if the diagnostics above justify it.
+
+## Later
+
+**5. Two shifted Gaussians (G1+G2) post-hoc diagnostic, and (if justified)
+use that evidence to design the next PDE-training experiment.**
+
+Motivated by the two-lobe residual (`RESEARCH_LOG.md` Section 15/19): a
+single shifted Gaussian only corrects one lobe. No longer the immediate
+next experiment — Sections 21–25 found a more urgent prior question (Tasks
+1–2 above): even a single, correctly-signed local Gaussian only weakly
+activates under the current training objective, so adding a second Gaussian
+does not obviously address that magnitude problem on its own. Not yet
+tested, post-hoc or otherwise.
 
 **Do not treat the Section 17 single-Gaussian optimum (`c=0.014,
 sigma=0.007646`) as parameters to train directly** — those are the optimum
 for a single post-hoc Gaussian fit against the fixed PDE-trained residual,
-not yet established as the correct local basis to train with.
+not an established correct local basis.
 
-## Next
-
-**2. Use the two-Gaussian spatial-basis evidence to design the next
-PDE-training experiment.**
-
-Only after Task 1 establishes whether/how much of the residual a
-two-Gaussian basis explains, and with centers/widths justified by that
-evidence (not assumed from the single-Gaussian search alone). Change
-exactly one factor at a time relative to the current baseline; keep RF
-realization, collocation set, optimizer, initialization, and training
-duration controlled, matching the established controlled-experiment
-convention used throughout `RESEARCH_LOG.md`.
-
-**3. Trainable Gaussian parameters (center, width).**
+**6. Trainable Gaussian parameters (center, width).**
 
 Later, after the fixed-parameter diagnostics above.
 
-**4. Two-stage RF + local training.**
+**7. Other local bases** (derivative-of-Gaussian, tanh transition,
+compactly supported bases, possibly a small learned local model).
 
-Stage 1: train the RF term alone. Stage 2: freeze or partially freeze the
-RF term and train the local correction against the resulting residual.
-
-**5. Separate implementation task: fix `nn.Parameter(...).to(device)`
+**8. Separate implementation task: fix `nn.Parameter(...).to(device)`
 registration in `model.py`.**
 
 Root cause documented in `RESEARCH_LOG.md` Section 16 — on CUDA,
@@ -59,7 +71,7 @@ Does not affect training correctness (these tensors have
 `requires_grad=False` and were used correctly throughout), only checkpoint
 completeness — not urgent, but should not be forgotten.
 
-**6. Increase RF feature count as a separate RF-only diagnostic.**
+**9. Increase RF feature count as a separate RF-only diagnostic.**
 
 Investigate whether the Gibbs-like oscillation/overshoot near the shock
 (visible after the Section 9 plotting fix) is a feature-count/conditioning
@@ -112,6 +124,23 @@ Multi-seed validation (not before — single-seed results throughout
   corrects only the right-hand residual lobe, leaving the left-hand lobe
   uncorrected. One Gaussian is not sufficient to reconstruct the full shock
   transition.
+- Joint PDE training with the shifted/wider Gaussian, IC-compatible form
+  (Section 21) — activated much more strongly than the old centered
+  Gaussian (coefficient norm ≈3.54x larger, ratio_shock ≈46x larger) but
+  worsened the solution; the learned local contribution had the wrong sign
+  relative to the post-hoc-useful direction.
+- `linear_t` with the shifted Gaussian (Section 22) — the single-scalar
+  local feature still learned a positive `d`, ruling out temporal-expansion
+  flexibility as the explanation for the wrong sign.
+- Fixed-RF one-dimensional `d` sweep (Section 23) — the PDE training
+  objective and solution error agree on direction (negative `d`) but
+  disagree sharply on magnitude; the `t=1` shock-error optimum (`d≈-0.66`)
+  matches the independent post-hoc oracle almost exactly.
+- Two-stage / frozen-RF training (Section 24) — directly confirmed RF/local
+  co-adaptation as a cause of the earlier joint-training sign reversal;
+  with RF frozen, `d` moved negative as the fixed-RF objective predicted
+  and modestly improved the solution, though the improvement remains small
+  (Section 25).
 
 ## Workflow
 

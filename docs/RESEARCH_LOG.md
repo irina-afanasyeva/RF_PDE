@@ -725,3 +725,270 @@ incomplete correction.
 Gaussians (one per lobe) represent substantially more of the fixed
 PDE-trained RF residual than one Gaussian can — tested post-hoc, before any
 new PDE training is attempted?
+
+(This question is revisited, and this section's framing partially
+superseded, by Sections 21–25 below, following the joint-training and
+two-stage experiments.)
+
+---
+
+## 21. Joint PDE training with the shifted/wider Gaussian (IC-compatible form)
+
+**Hypothesis.** Sections 17/19 found that a shifted Gaussian (`center=0.014,
+sigma=0.007646112`) is a substantially better post-hoc correction direction
+for the PDE-trained RF residual than the old centered/narrow one (`center=0,
+sigma=0.0025`). Test whether using these post-hoc-diagnosed spatial
+parameters *in actual joint PDE training* (not just post-hoc fitting) lets
+the IC-compatible local feature activate more strongly and/or improve the
+solution.
+
+**Experiment.** `local_time_mode="ic_compatible"` for both cases
+(`u_local = G(x) * sum_j d_j [phi_j^t(t) - phi_j^t(0)]`), zero-initialized
+coefficients, identical seed/RF realization/training procedure for both.
+Script: `Burgers/scripts/test_ic_compatible_shifted_gaussian.py` (`acd2e13`).
+
+**Result — CONTROL (old centered/narrow Gaussian, `center=0, sigma=0.0025`):**
+```
+global = 0.27157725346704753
+smooth = 0.24441935968669457
+shock  = 0.8399784150822186
+local_coef_norm = 0.006626701293116823
+ratio_shock = 0.0009167552106071844
+```
+(This reproduces Section 10's `ic_compatible` row to full precision — a
+useful internal consistency check between the two scripts, not a new result
+on its own.)
+
+**Result — TEST (shifted/wider Gaussian, `center=0.014, sigma=0.007646112`):**
+```
+global = 0.286812083788391
+smooth = 0.25496570138109376
+shock  = 0.9443527283849813
+local_coef_norm = 0.02345200946944816
+ratio_full  = 0.002849256798371605
+ratio_shock = 0.04213353649724597
+```
+
+**Observation.** The shifted Gaussian activated much more strongly during
+joint training (`local_coef_norm` ≈3.54x larger, `ratio_shock` ≈46x larger
+than CONTROL), but both global and shock solution error got *worse* than
+CONTROL and worse than the RF-only baseline. Component plots showed that at
+`t=1` the learned local contribution on the positive-`x`/right side was
+**positive**, whereas the post-hoc-useful correction there required a
+**negative** amplitude (Section 17). Because this was joint training, the RF
+component itself was also free to change, so this is not simply "same RF,
+wrong Gaussian parameters" — RF and local components could co-adapt.
+
+**Interpretation.** Spatial placement/scale was evidently *part* of the
+previous non-activation problem (the shifted Gaussian clearly engaged much
+more strongly), but activation alone does not guarantee an accurate
+correction — here joint optimization learned a decomposition that made the
+solution worse, with the wrong sign relative to the post-hoc-useful
+direction.
+
+---
+
+## 22. Simplifying the temporal form: `linear_t` with the shifted Gaussian
+
+**Hypothesis.** Advisor suggestion from `meetings/2026-09-23.md` (already
+used in Section 12) — test whether the 10-coefficient `ic_compatible`
+temporal expansion itself, rather than the Gaussian's spatial placement, was
+responsible for the wrong-sign result in Section 21.
+
+**Experiment.** Same shifted Gaussian (`center=0.014, sigma=0.007646112`)
+for both cases: (A) `ic_compatible` (10 trainable `d_j`, reproduces Section
+21's TEST result) vs. (B) `linear_t` (`u_local = d*t*G(x)`, exactly one
+trainable scalar `d`). Script:
+`Burgers/scripts/test_shifted_gaussian_time_modes.py` (`bf88b03`).
+
+**Result — `linear_t`:**
+```
+d = +0.02335906311371956
+global = 0.2863551208182298
+smooth = 0.25478499908981045
+shock  = 0.9391014811156511
+IC error = 0.002432348946430675
+ratio_full  = 0.0023750908843608773
+ratio_shock = 0.03611833061224904
+final PDE loss = 0.2380526586649464
+```
+
+**Observation.** The single-scalar `linear_t` result was marginally better
+than the 10-coefficient `ic_compatible` shifted case (Section 21's TEST),
+but still much worse than the RF-only baseline. Most importantly, the
+learned `d` was **positive**, even though the only known post-hoc-useful
+amplitude at this spatial location (`t=1` shock-optimal, Section 17) was
+**negative** (`d_star_shock ≈ -0.6578595`).
+
+**Interpretation.** Reducing the temporal representation to a single scalar
+did not change the sign outcome. Excessive flexibility of the temporal RF
+expansion is therefore not sufficient to explain the wrong-sign local
+correction — even the simplest possible one-parameter local model learned a
+positive `d` during joint training.
+
+---
+
+## 23. Fixed-RF one-dimensional `d` sweep
+
+**Hypothesis.** Determine whether the positive sign learned above (Sections
+21–22) is already preferred by the fixed-RF PDE/IC/BC objective itself, or
+whether it only emerges from RF/local co-adaptation during joint
+optimization.
+
+**Experiment.** Freeze the canonical PDE-trained RF checkpoint completely
+(`checkpoint_complete.pt`) and study, without training anything,
+```
+u(x,t;d) = u_RF(x,t) + d*t*G(x),   center=0.014, sigma=0.007646112
+```
+over a dense sweep of `d`. Script:
+`Burgers/scripts/diagnose_fixed_rf_linear_d_sweep.py` (`e3e2f0f`).
+
+**Derivation.** With `q(x,t) = t*G(x)`, the Burgers residual decomposes
+exactly as `r(d) = r0 + d*r1 + d^2*r2`, with `r0` the residual of `u_RF`
+alone, `r1 = q_t + u_RF*q_x + q*u_RF_x - nu*q_xx`, `r2 = q*q_x`. This
+decomposition was verified numerically against the full nonlinear residual
+to machine precision.
+
+**Observation — derivative at `d=0`:**
+```
+<r0,r1> = 0.047149718399925565
+dL_PDE/dd|0 = 2<r0,r1> = +0.09429943679985113   (analytic)
+dL_PDE/dd|0 = +0.09429889934210733               (finite-difference)
+```
+Since this derivative is positive, gradient descent starting from `d=0`
+should initially move `d` **negative** for the fixed-RF objective.
+
+**Observation — sweep optima:**
+```
+weighted training-loss optimum: d* ≈ -0.010
+canonical global-error optimum: d* ≈ -1.110
+canonical shock-error optimum:  d* ≈ -1.020
+t=1 global-error optimum:       d* ≈ -0.725
+t=1 shock-error optimum:        d* ≈ -0.660
+```
+The `t=1` shock-error optimum (`-0.660`) closely agrees with the independent
+post-hoc oracle from Section 17 (`-0.6578595`).
+
+**Observation — values at reference points:**
+```
+at d=0:      PDE loss = 0.2359001, canonical shock = 0.8390488, t=1 shock = 0.7597471
+at d≈-0.66:  PDE loss ≈ 3.036739, canonical shock ≈ 0.634366, t=1 shock ≈ 0.396443
+```
+
+**Observation — IC/BC exact d-independence.** `IC` and `BC` losses were
+exactly independent of `d` in this diagnostic: `q(x,0)=0` identically (so IC
+is unaffected), and `G(x=±1)` underflows to exactly `0.0` in float64 at this
+width (so BC is unaffected). All `d`-dependence in this diagnostic comes
+from the interior Burgers residual.
+
+**Interpretation.** The fixed-RF PDE training objective and solution-error
+metrics **agree on the useful direction** (negative `d`) but **strongly
+disagree on the useful magnitude** — the PDE objective prefers only a small
+negative correction, while solution accuracy continues to improve for much
+larger negative amplitudes.
+
+---
+
+## 24. Two-stage / frozen-RF training
+
+**Hypothesis.** Directly test the co-adaptation explanation suggested by
+Sections 21–23: if the RF is held exactly fixed (as in Section 23) but the
+local scalar `d` is actually *trained* (not just swept) against the same
+objective, does it move in the direction the fixed-RF objective predicts?
+
+This design was suggested by the advisor at the 09/30 meeting
+(`meetings/2026-09-30.md`: "Suggested a two-stage training approach: train
+the RF term first, then freeze (or partially freeze) it and train the local
+correction against the resulting residual.").
+
+**Experiment.** Stage 1 (already complete): the canonical RF-only
+checkpoint, loaded and frozen exactly. Stage 2: train only `d`
+(`u_local=d*t*G(x)`, `center=0.014, sigma=0.007646112`, `d` initialized at
+exactly `0`), using the normal training settings unchanged (`LR`,
+`WEIGHT_DECAY=1`, `IC_BC_WEIGHT`, `EPOCHS=1000`). Script:
+`Burgers/scripts/test_two_stage_linear_local_feature.py` (`873240d`).
+
+**Observation — pre-training verification.** With `d=0`, the loaded model
+reproduced the canonical RF-only metrics essentially exactly, and
+`local_coefficients` was confirmed to be the only trainable parameter.
+
+**Observation — sign tracking:**
+```
+grad_d at d=0 (before first step) = +0.09429943679985112
+d after first Adam step = -0.0004999999469774197
+final d (epoch 999)     = -0.010459279905632843
+```
+The initial gradient matches Section 23's independently-computed analytic
+derivative (`+0.09429943679985113`) to within floating-point precision — a
+cross-check between the two separate scripts. The final `d` (`-0.0105`) is
+close to the fixed-RF sweep's weighted-training-loss optimum (`d* ≈ -0.010`,
+Section 23).
+
+**Observation — final metrics:**
+```
+global = 0.27117857732889317
+smooth = 0.244349311488394
+shock  = 0.8348521566708592
+IC     = 0.0015740911161049949
+ratio_full  = 0.0010636693472845784
+ratio_shock = 0.02801549548933219
+final PDE loss = 0.2353518646856644
+```
+
+**Observation — frozen-RF invariance.** `max|after-before| = 0.0` for `Wx,
+Wt, bx, bt, model.0.weight` — the RF truly did not change during Stage 2.
+
+**Comparison:**
+```
+RF-only:          d=0,                     global=0.27149430095802507, smooth=0.2443827084159696, shock=0.8390487998889169
+JOINT linear_t:   d=+0.02335906311371956,  global=0.2863551208182298,  smooth=0.25478499908981045, shock=0.9391014811156511
+TWO-STAGE frozen: d=-0.010459279905632843, global=0.27117857732889317, smooth=0.244349311488394,  shock=0.8348521566708592
+```
+
+**Interpretation.** This provides strong evidence for RF/local
+**co-adaptation** during joint training: with the RF frozen, the local
+correction moved negative exactly as predicted by the fixed-RF objective's
+own derivative/sweep (Section 23), and modestly improved global/smooth/shock
+error relative to the RF-only baseline. With the RF trainable jointly
+(Sections 21–22), the local coefficient changed sign to positive and
+solution accuracy became worse. This supports the interpretation that the
+earlier joint-training failure is not adequately explained by: the Gaussian
+spatial basis being useless (Section 17/18 refute this); the shifted
+Gaussian failing to activate (Section 21 refutes this); the temporal RF
+expansion being too flexible (Section 22 refutes this); or the fixed-RF PDE
+objective itself preferring positive `d` (Section 23 refutes this). The
+evidence instead points toward interaction/co-adaptation between the global
+RF coefficients and the local feature during joint optimization.
+
+---
+
+## 25. Remaining issue and updated central question
+
+Two-stage training (Section 24) resolves the **sign**/co-adaptation puzzle
+diagnostically, but the resulting improvement remains small: canonical shock
+error only moves `0.8390488 → 0.8348522`, despite the local feature now
+moving in the useful direction. Section 23's sweep explains why — the
+PDE-training objective's own optimum is only `d≈-0.01`, while solution-error
+optima prefer much larger negative amplitudes (`d≈-0.66` to `-1.11`
+depending on the metric).
+
+**Updated central question (supersedes Section 20's framing):** the
+question is no longer simply "how do we make `u_local` activate?" (Sections
+21/24 show it can, with the right sign, once RF is frozen). It is now:
+
+**Why does the PDE-residual training objective favor only a weak local
+correction, when a substantially stronger local correction in the same
+direction would reduce solution error in the shock region?**
+
+Candidate contributors to investigate (none yet established as *the*
+cause):
+- the structure/conditioning of the PDE residual near the shock;
+- an objective mismatch between residual minimization and solution
+  accuracy;
+- `WEIGHT_DECAY=1` suppressing the local amplitude (plausible, not yet
+  tested in a controlled experiment — do not treat this as established);
+- representational limitations of a single one-signed Gaussian (Section
+  15's two-lobe residual finding);
+- eventually, two shifted Gaussians (`G1+G2`) to represent both residual
+  lobes (Section 15/19; still a future direction, not yet tested in joint
+  training or even in the post-hoc two-Gaussian diagnostic).
