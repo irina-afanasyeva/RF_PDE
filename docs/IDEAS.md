@@ -15,26 +15,26 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 2. **Shifted Gaussian features.** Motivated by the Section 13 finding in
    `RESEARCH_LOG.md`: allow `center != 0`.
 
-3. **Two shifted Gaussians, opposite-signed — strong future representation
-   idea (no longer the immediate next experiment).** `RESEARCH_LOG.md`
-   Section 15 confirms the PDE-trained RF residual has a two-lobe,
-   sign-changing structure around the shock (positive on the left, negative
-   on the right at `t=1`), and Section 19 shows a single shifted Gaussian
-   corrects only one (right-hand) lobe. Natural future candidate,
-   consistent with the Sept-30 advisor discussion:
+3. **Two shifted Gaussians, opposite-signed — representation confirmed;
+   training amplitude now the open question.** `RESEARCH_LOG.md` Section
+   15 confirmed the PDE-trained RF residual has a two-lobe, sign-changing
+   structure around the shock, and Section 19 showed a single shifted
+   Gaussian corrects only one lobe. This item is now **tested**: Section
+   26's jointly searched, well-conditioned K=2 pair (consistent with the
+   Sept-30 advisor discussion of multiple shifted-center Gaussians)
+   explains ~99.8% of the `t=1` shock residual (≈95.3% shock-error
+   improvement over RF-only) — representation is confirmed strong, not
+   merely hypothesized. Section 27 then trained
 
-       u_local(x,t) = d1(t) G1(x;c1,sigma1) + d2(t) G2(x;c2,sigma2)
+       u_local(x,t) = t * [d1*G1(x;c1,sigma1) + d2*G2(x;c2,sigma2)]
 
-   with potentially opposite-signed amplitudes. Sections 21–25 found a more
-   urgent prior question, however: even a single, correctly-signed local
-   Gaussian only weakly activates under the current PDE training objective
-   (two-stage frozen-RF training reached only `d≈-0.01`, far short of the
-   `d≈-0.66` to `-1.11` that would actually reduce solution error). Adding a
-   second Gaussian does not obviously address that magnitude problem, so
-   `TODO.md` now prioritizes understanding the amplitude limitation first;
-   G1+G2 remains a strong candidate for the separate *representation*
-   question (whether one-sided correction is enough at all) once that is
-   understood. **Not yet tested, post-hoc or otherwise.**
+   against the frozen RF from `d1=d2=0`: both amplitudes start in the
+   correct direction but converge to only ~5.6% of their useful oracle
+   values, with the RF completely frozen (ruling out co-adaptation as the
+   explanation here). Section 28's weight-decay sweep shows this gap is
+   only partially regularization-driven, and reveals a new, unexplained
+   asymmetry between `d1` and `d2` (see `RESEARCH_LOG.md` Section 29 /
+   `TODO.md` current priority).
 
 4. **Derivative-of-Gaussian feature — secondary interpretation.** A pair of
    oppositely-signed shifted Gaussians (item 3) can itself resemble an odd,
@@ -46,7 +46,12 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
    `sigma(t)` — raised at the 08/26 meeting, not yet tested in a controlled
    experiment.
 
-6. **Trainable center and width** (as opposed to fixed, swept values).
+6. **Trainable Gaussian geometry: center, width, AND amplitude — advisor
+   direction (2026-10-07 meeting, `docs/meetings/2026-10-07.md`).** Extends
+   this earlier "trainable center and width" idea to also train the
+   amplitude `d` jointly through the PDE objective: `{c, sigma, d}` for one
+   Gaussian, generalizing to `{c_k, sigma_k, d_k}` for K Gaussians. Not yet
+   attempted; see `TODO.md` item D.
 
 7. **Two-stage / residual training — experimentally supported, worth
    retaining as a diagnostic strategy.** Train the RF term first (already
@@ -113,14 +118,89 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
     or activate weakly but with the correct sign (Section 24) — these are
     different failure modes requiring different fixes.
 
-17. **`WEIGHT_DECAY=1` suppressing the local amplitude — hypothesis, not a
-    conclusion.** Vanilla `Adam`'s weight decay (not decoupled, unlike
-    `AdamW`) adds `weight_decay*param` directly to the gradient, in
-    proportion to the parameter's own current magnitude — plausible as one
-    contributor to why two-stage training (Section 24) reached only
-    `d≈-0.01` instead of a solution-error-reducing `d≈-0.66` or beyond.
-    This has **not** been tested in a controlled experiment and must not be
-    treated as established; see `TODO.md`.
+17. **`WEIGHT_DECAY=1` suppressing the local amplitude — now tested; a
+    real but partial contributor, not a full explanation.** `RESEARCH_LOG.md`
+    Section 28 ran the controlled `weight_decay in {1.0,0.1,0.01,0.0}`
+    sweep this hypothesis called for. Result: reducing weight decay does
+    measurably grow both amplitudes and improve PDE loss/solution error,
+    and the effect saturates by `weight_decay≈0.01` — so weight decay is a
+    real contributor. However, even at `weight_decay=0` both amplitudes
+    remain far from their post-hoc oracle values, and the two amplitudes
+    are affected asymmetrically (`d2` reaches ~33% of oracle, `d1` only
+    ~3.5%). **Do not treat weight decay as the cause of the amplitude
+    problem** — it explains only part of it, and does not explain the
+    `d1`/`d2` asymmetry at all.
+
+18. **Conceptual framework, extended after Sections 26–28.** The
+    distinctions in item 16 (activation / sign-direction / amplitude /
+    representation capacity / co-adaptation) are now joined by two more,
+    needed to describe today's results:
+    - *regularization* — does an explicit regularizer (e.g.
+      `WEIGHT_DECAY`) suppress the learned amplitude independently of the
+      PDE/IC/BC objective itself? (Section 28: yes, partially.)
+    - *objective mismatch* — does the PDE-residual training objective have
+      a genuinely different preferred correction (in sign, magnitude, or
+      balance between multiple local terms) than the one that minimizes
+      solution error, even when representation, direction, co-adaptation,
+      and regularization are all controlled for? (Section 27/28: with
+      representation (strong), direction (correct), co-adaptation (RF
+      frozen, ruled out), and regularization (tested, partial and
+      asymmetric) progressively isolated, the remaining `d1`/`d2`
+      amplitude asymmetry currently points toward an objective mismatch —
+      i.e., the PDE/IC/BC objective itself may simply prefer a different,
+      weaker, and asymmetric correction between the two Gaussians than the
+      `t=1` solution-error oracle does.)
+
+    **This is the current leading hypothesis, not an established
+    conclusion** — Section 29's updated central question (why the
+    objective favors `d2` far more than `d1`) has not yet been directly
+    tested (e.g. by comparing per-Gaussian PDE-loss gradients, or mapping
+    the PDE objective's optimum in the full `(d1,d2)` plane). Do not
+    overstate causality beyond what has actually been tested.
+
+19. **Multiscale / two-population RF basis — new hypothesis from the
+    2026-10-07 meeting, not yet tested.**
+    ```
+    u_RF = sum_{k=1}^{N1} a_k cos(w_k^(1) x + b_k^(1))
+         + sum_{k=1}^{N2} beta_k cos(w_k^(2) x + b_k^(2))
+
+    w_k^(1) ~ N(0, sigma_1^2),  w_k^(2) ~ N(0, sigma_2^2),  N = N1 + N2
+    ```
+    Motivation: one RF population represents smoother spatial structure
+    while a second, different frequency scale provides additional
+    resolution around the sharp shock. **This is a hypothesis, not an
+    established conclusion.** Candidate `N1,N2` values from the advisor's
+    handwritten notes are TBD / need confirmation before implementation —
+    do not invent specific values. See `TODO.md` item E.
+
+20. **Interaction between global RF capacity (N) and local Gaussian
+    enrichment (K) — raised at the 2026-10-07 meeting.** The RF
+    basis-size study (`TODO.md` items A/B) and the `K>=8` Gaussian-
+    enrichment study (`TODO.md` item C) are not fully independent:
+    increasing `N` could change the RF-only residual's shape/magnitude
+    near the shock, which would in turn change how much
+    representation/training benefit a K-Gaussian local correction
+    provides. The exact N-by-K experimental design is explicitly **TBD**
+    (`TODO.md` item C) — this item records the conceptual interaction, not
+    a committed experimental matrix.
+
+21. **Proposed diagnostic axes for the amplitude/asymmetry question,
+    extending item 18 after the 2026-10-07 meeting.** A fully controlled
+    future diagnostic should aim to separate FOUR axes, not just the two
+    (representation, regularization) already tested:
+    - *representation capacity* — already strongly established (Section
+      26);
+    - *PDE-objective preference* — what the PDE/IC/BC objective's own
+      optimum actually is in the full `(d1,...,dK)` space, independent of
+      how it is reached by an optimizer;
+    - *regularization* — already partially tested (Section 28);
+    - *optimization dynamics* — whether Adam (or its hyperparameters)
+      actually reaches the PDE objective's own optimum, or stalls/diverges
+      from it for other reasons.
+    Section 29's asymmetry finding is consistent with a PDE-objective-
+    preference explanation, but has not yet been separated from an
+    optimization-dynamics explanation. **This is a design sketch, not a
+    committed experiment.**
 
 ## Ideas already tested — evidence against (do not re-attempt without new reasoning)
 

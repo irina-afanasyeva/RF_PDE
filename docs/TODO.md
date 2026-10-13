@@ -5,63 +5,84 @@ reasoning behind each item; this file tracks priority and status only.
 
 ## Current priority
 
-**1. Investigate why the fixed-RF PDE training objective permits only a
-small negative local amplitude, despite larger solution-error improvement
-being possible.**
+**Following the 2026-10-07 advisor meeting** (`docs/meetings/2026-10-07.md`;
+`RESEARCH_LOG.md` Section 30), the immediate execution order is A–E below.
+The still-open `d1`/`d2` asymmetry question from before the meeting
+(previously item 1) is **not dropped** — it is carried forward as the
+scientific motivation for item C and the diagnostics listed under it.
 
-`RESEARCH_LOG.md` Section 23 (fixed-RF sweep): the PDE-training objective's
-own optimum is `d*≈-0.01`, while solution-error optima prefer `d*≈-0.66` to
-`-1.11` depending on the metric. Section 24 (two-stage training) confirmed
-Adam actually reaches `d≈-0.0105` when the RF is frozen — matching the
-fixed-RF prediction almost exactly — but this barely improves the solution
-(canonical shock error `0.8390488 → 0.8348522`). This is now the central
-open question (Section 25).
+**A. RF basis-size baseline study: N = 500, 1000, 2000.**
 
-**2. A controlled `WEIGHT_DECAY` diagnostic is a plausible simple next
-test.**
+Advisor-specified values. Train the RF-only baseline at each `N` (all
+other settings controlled/unchanged), reporting both global relative L2
+and shock-region relative L2 for each. This fulfills and concretizes the
+earlier "increase RF feature count" diagnostic (previously item 6).
 
-Inspect/discuss the exact mechanism before implementing anything. Vanilla
-`Adam`'s weight decay (not decoupled, unlike `AdamW`) adds
-`weight_decay*param` directly to the gradient, in proportion to the
-parameter's own current magnitude — plausible as one contributor to the
-small amplitude above. **Do not assume this is the cause** — it is one
-candidate among several (`RESEARCH_LOG.md` Section 25, `IDEAS.md` item 17).
+**B. Plot global and shock relative L2 error versus N.**
+
+One error-vs-`N` plot (both metrics on it), using the results from A, to
+determine whether increasing RF capacity continues to reduce error or
+whether it plateaus.
+
+**C. Design the `K>=8` PDE-training experiment in light of the
+capacity-study result (A/B).**
+
+Extend Gaussian enrichment to `K>=8` for both the post-hoc/oracle
+representation diagnostics and the PDE-training diagnostics (advisor
+direction), informed by whichever RF feature count A/B motivates. **The
+exact N-by-K combinations to run are TBD** — not yet decided, and this
+should not be expanded into a full N×K matrix without further
+confirmation. This also continues the still-open question of why the
+frozen-RF PDE objective favors `d2` far more than `d1`
+(`RESEARCH_LOG.md` Section 29) — a richer `K>=8` basis gives another angle
+on that question, not a replacement for it.
+
+**Possible future diagnostics for the `d1`/`d2` asymmetry question**
+(`RESEARCH_LOG.md` Section 29 — not yet run, remain open questions, not
+conclusions):
+- analyze the PDE-loss contributions/gradients separately for `G1` versus
+  `G2`, to see whether the objective's local gradient structure itself is
+  asymmetric between the two Gaussians;
+- compare the PDE-training objective's optimum in the full `(d1,d2)` plane
+  against the solution-error optimum (extending Section 23's 1-D sweep to
+  2-D), to see whether the objective's preferred point is itself
+  asymmetric or whether optimization dynamics are responsible;
+- only later return to joint RF+local training with a richer basis.
 
 ## Next
 
-**3. Investigate the structure/conditioning of the PDE residual near the
-shock**, as a possible explanation for why the training objective tolerates
-only a small local-correction magnitude.
+**D. Trainable Gaussian geometry: train center `c`, width `sigma`, and
+amplitude `d` jointly through the PDE objective** (generalizes to
+`{c_k, sigma_k, d_k}` for multiple Gaussians).
 
-**4. Consider two-stage training with a richer local representation** (e.g.
-two Gaussians, trainable center/width) if the diagnostics above justify it.
+Advisor direction (2026-10-07 meeting); supersedes/extends the earlier
+"trainable center and width" item (previously item 3) by also training the
+amplitude. Recorded as a future experiment, not yet attempted — only after
+the amplitude/capacity questions above (A–C) are further understood.
+
+**E. Multiscale/two-population RF experiment.**
+
+New hypothesis from the 2026-10-07 meeting (`RESEARCH_LOG.md` Section 30):
+two RF populations at different frequency scales,
+```
+u_RF = sum_k a_k cos(w_k^(1) x + b_k^(1)) + sum_k beta_k cos(w_k^(2) x + b_k^(2))
+```
+with `w_k^(1) ~ N(0,sigma_1^2)`, `w_k^(2) ~ N(0,sigma_2^2)`. Motivation:
+one population for smoother structure, the other for additional shock
+resolution. **Not yet tested; candidate `N1,N2` values from the
+handwritten notes are TBD / need advisor confirmation before
+implementation** — do not invent specific values.
+
+**F. Investigate the structure/conditioning of the PDE residual near the
+shock**, as a possible explanation for the amplitude/asymmetry questions
+above.
 
 ## Later
 
-**5. Two shifted Gaussians (G1+G2) post-hoc diagnostic, and (if justified)
-use that evidence to design the next PDE-training experiment.**
-
-Motivated by the two-lobe residual (`RESEARCH_LOG.md` Section 15/19): a
-single shifted Gaussian only corrects one lobe. No longer the immediate
-next experiment — Sections 21–25 found a more urgent prior question (Tasks
-1–2 above): even a single, correctly-signed local Gaussian only weakly
-activates under the current training objective, so adding a second Gaussian
-does not obviously address that magnitude problem on its own. Not yet
-tested, post-hoc or otherwise.
-
-**Do not treat the Section 17 single-Gaussian optimum (`c=0.014,
-sigma=0.007646`) as parameters to train directly** — those are the optimum
-for a single post-hoc Gaussian fit against the fixed PDE-trained residual,
-not an established correct local basis.
-
-**6. Trainable Gaussian parameters (center, width).**
-
-Later, after the fixed-parameter diagnostics above.
-
-**7. Other local bases** (derivative-of-Gaussian, tanh transition,
+**G. Other local bases** (derivative-of-Gaussian, tanh transition,
 compactly supported bases, possibly a small learned local model).
 
-**8. Separate implementation task: fix `nn.Parameter(...).to(device)`
+**H. Separate implementation task: fix `nn.Parameter(...).to(device)`
 registration in `model.py`.**
 
 Root cause documented in `RESEARCH_LOG.md` Section 16 — on CUDA,
@@ -70,12 +91,6 @@ Root cause documented in `RESEARCH_LOG.md` Section 16 — on CUDA,
 Does not affect training correctness (these tensors have
 `requires_grad=False` and were used correctly throughout), only checkpoint
 completeness — not urgent, but should not be forgotten.
-
-**9. Increase RF feature count as a separate RF-only diagnostic.**
-
-Investigate whether the Gibbs-like oscillation/overshoot near the shock
-(visible after the Section 9 plotting fix) is a feature-count/conditioning
-effect, independent of the local-feature question.
 
 ## After a promising model
 
@@ -141,6 +156,26 @@ Multi-seed validation (not before — single-seed results throughout
   with RF frozen, `d` moved negative as the fixed-RF objective predicted
   and modestly improved the solution, though the improvement remains small
   (Section 25).
+- PDE-trained-RF post-hoc two-Gaussian representation diagnostic (Section
+  26) — a jointly searched, well-conditioned K=2 pair explains ~99.8% of
+  the `t=1` shock residual (shock error `0.7597 → 0.0359`, ≈95.3%
+  improvement); representation capacity is not the bottleneck.
+- Greedy K-Gaussian representation-capacity study, K=1..8, with
+  independent dense-grid validation (Section 26) — confirms very high,
+  genuine representation capacity; K=8 is explicitly NOT claimed optimal,
+  and the clean K=2 pair remains preferred for trainability experiments.
+- Frozen-RF two-Gaussian amplitude-only PDE training (Section 27) — both
+  `d1,d2` start in the correct (oracle-matching) direction from zero, but
+  converge to only ~5.6% of their useful post-hoc amplitudes, with the RF
+  completely frozen throughout (ruling out co-adaptation as the
+  explanation for this specific gap).
+- Weight-decay sensitivity sweep, `weight_decay in {1.0,0.1,0.01,0.0}`
+  (Section 28) — weight decay materially suppresses the amplitudes
+  (especially `d2`) and the effect saturates by `weight_decay≈0.01`, but
+  even at `weight_decay=0` both amplitudes remain far from oracle, with a
+  pronounced, unexplained asymmetry between `d1` (~3.5% of oracle) and
+  `d2` (~33% of oracle). Weight decay is a real but partial contributor,
+  not a full explanation.
 
 ## Workflow
 

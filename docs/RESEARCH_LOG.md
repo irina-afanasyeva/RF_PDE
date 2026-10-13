@@ -992,3 +992,277 @@ cause):
 - eventually, two shifted Gaussians (`G1+G2`) to represent both residual
   lobes (Section 15/19; still a future direction, not yet tested in joint
   training or even in the post-hoc two-Gaussian diagnostic).
+
+(Sections 26–29 below report the completed two-Gaussian representation
+diagnostic, the K-Gaussian capacity study, frozen-RF amplitude-only
+training, and the weight-decay sensitivity sweep that together answer
+parts of this question and motivate the next one, in Section 29.)
+
+---
+
+## 26. Two-Gaussian and K-Gaussian post-hoc representation capacity
+
+**Hypothesis.** Section 15/19 established that the PDE-trained RF residual
+at `t=1` has a two-lobe, sign-changing structure that a single Gaussian can
+only partially correct. Test whether a **jointly searched pair** of
+shifted Gaussians — one per lobe — can represent substantially more of the
+fixed residual, and characterize how representation capacity scales with
+more Gaussians.
+
+**Experiment — residual-informed left/right two-Gaussian search.** Fixed,
+verified PDE-trained RF checkpoint; `G1` center restricted to the left half
+of the existing `C_VALUES` grid, `G2` to the right half, full `SIGMA_VALUES`
+for each side; amplitudes solved by closed-form least squares (SVD-based
+`lstsq`, never an optimizer) for every candidate pair. Script:
+`Burgers/scripts/test_pde_trained_two_gaussian_correction.py` (`a6f6afc`).
+
+**Result — RF-only vs. single-Gaussian vs. jointly searched two-Gaussian,
+t=1 shock error:**
+```
+K=0 (RF-only):           0.7597470709454747
+K=1 (best single Gaussian): ~0.396438   (Section 17)
+K=2 (best jointly searched pair):
+    c1 = -0.010,  sigma1 = 0.010673841067708996,  d1_oracle = +0.6296921638041192
+    c2 = +0.010,  sigma2 ~ 0.01490050,             d2_oracle = -0.6813727781614515
+    shock error = 0.03589738957120498
+```
+RF→2G shock improvement ≈ **95.275%**. Condition number of the two-column
+fit ≈ **2.023** (well-conditioned, not a near-collinear/canceling pair).
+Shock-residual R² ≈ **0.997768**.
+
+**Interpretation.** The jointly searched two-Gaussian pair captures nearly
+all of the `t=1` shock residual — strong confirmation that representation
+capacity is not the bottleneck: two well-placed, oppositely-signed
+Gaussians are sufficient to explain the two-lobe residual almost entirely.
+
+**Experiment — greedy K-Gaussian representation-capacity study.** Greedy
+forward basis selection (all amplitudes jointly refit by closed-form least
+squares at every step, never Adam) from the same Gaussian candidate
+library, `K=1..8`, with an independent, denser shock grid used only to
+validate each step's fixed correction (never for selection/fitting), to
+distinguish genuine representation gains from discrete-grid overfitting.
+Script: `Burgers/scripts/test_pde_trained_k_gaussian_correction.py`
+(`57024c1`).
+
+**Result (qualitative).** The Gaussian dictionary has **very high**
+representation capacity: the independent dense-grid validation error
+tracked the fitting-grid error closely through `K=8`, with `K=8` dense
+shock error ≈ **0.0033113** and dense R² ≈ **0.999981**. This confirms the
+K=2 representation gain (above) is genuine, not an artifact of fitting the
+sparse canonical shock grid.
+
+**Important caveat — do not over-read this result.** `K=8` is **not**
+claimed to be the optimal or necessary number of Gaussians — this was a
+greedy, non-exhaustive search, and most of the achievable representation
+gain was already captured at `K=2`. The clean, well-conditioned,
+jointly-searched **K=2** pair above remains the preferred basis for
+controlled trainability experiments; `K=8` is reported only to
+characterize how quickly representation capacity saturates.
+
+---
+
+## 27. Frozen-RF two-Gaussian PDE training (amplitude-only)
+
+**Hypothesis.** Section 26 shows a fixed, well-conditioned two-Gaussian
+basis can represent almost all of the `t=1` shock residual. Does the
+PDE-training objective itself, with the RF **and** the Gaussian geometry
+completely frozen, learn amplitudes comparable to the useful post-hoc
+values when only `d1,d2` are trained from zero? This directly extends
+Section 24's frozen-RF single-Gaussian result to the representationally
+sufficient K=2 basis, and tests whether the small-magnitude problem found
+there (Section 25) persists when the representation bottleneck is removed.
+
+**Experiment.** Model `u = u_RF + t*[d1*G1(x) + d2*G2(x)]`, with
+`(c1,sigma1,c2,sigma2)` fixed to the Section 26 pair-search geometry; RF
+and Gaussian geometry completely frozen; only `d1,d2` trained from exactly
+zero, same training settings as Section 24 (`LR`, `WEIGHT_DECAY=1`,
+`IC_BC_WEIGHT`, `EPOCHS=1000`). Script:
+`Burgers/scripts/test_two_stage_two_gaussian_local_feature.py` (`65534b9`).
+
+**Result:**
+```
+final d1 = +0.035453350169778575
+final d2 = -0.03832831801950355
+
+d1/d1_oracle = 0.05630267011041793
+d2/d2_oracle = 0.05625161328417738
+
+canonical: global=0.26946486173938333, smooth=0.243773446446857, shock=0.8169198499822581
+t=1:       global=0.2221142171017243, smooth=0.183106156638777, shock=0.7170982076598021
+```
+Both initial PDE-descent directions (`-grad_d1`, `-grad_d2` at `d1=d2=0`)
+agreed with the useful oracle signs. All frozen RF tensors
+(`Wx,Wt,bx,bt,model.0.weight`) changed by exactly `0.0`.
+
+**Interpretation.**
+```
+representation:          strong   (Section 26)
+initial direction/sign:  correct  (both d1, d2)
+learned amplitude:       much too small (~5.6% of oracle for both)
+```
+Because the RF is completely frozen throughout this experiment, **this
+amplitude limitation cannot be attributed to RF/local co-adaptation** —
+Section 24's co-adaptation explanation for the *sign* problem does not
+apply here, since there is no RF left to co-adapt with. Something about the
+frozen-RF PDE-training objective itself strongly limits the learned
+amplitude, even when the representation is known (post-hoc) to be
+excellent and the initial direction is already correct.
+
+---
+
+## 28. Weight-decay sensitivity of the frozen-RF two-Gaussian amplitude
+
+**Hypothesis.** Section 27 left both amplitudes at only ~5.6% of their
+useful post-hoc values despite correct initial direction. `WEIGHT_DECAY=1`
+(vanilla, non-decoupled Adam) adds `weight_decay*param` directly to the
+gradient, pulling parameters toward zero in proportion to their own
+magnitude — a plausible, previously untested, contributor (`IDEAS.md` item
+17). Test this directly with a controlled sweep rather than assuming it.
+
+**Experiment.** `WEIGHT_DECAY in {1.0, 0.1, 0.01, 0.0}`, all other
+conditions identical to Section 27 (same frozen checkpoint, same Gaussian
+geometry, same `d1=d2=0` init, same seed/interior points reset identically
+before each case, same LR/epochs/`IC_BC_WEIGHT`/optimizer). Script:
+`Burgers/scripts/sweep_two_stage_two_gaussian_weight_decay.py` (`9d55e6e`).
+The `weight_decay=1.0` case reproduced Section 27's result within tolerance
+(control gate passed) before the other cases were interpreted.
+
+**Result:**
+
+| weight_decay | d1 | d2 | d1/oracle | d2/oracle | canonical shock | t=1 shock | final PDE loss |
+|---|---|---|---|---|---|---|---|
+| 1.0 | +0.03545335 | -0.03832832 | 0.05630 | 0.05625 | 0.81691985 | 0.71709821 | — |
+| 0.1 | +0.02536062 | -0.20187330 | 0.04027 | 0.29627 | 0.77304914 | 0.61442670 | 0.22376522 |
+| 0.01 | +0.02240566 | -0.22241667 | 0.03558 | 0.32642 | 0.76957076 | 0.60748817 | 0.22353109 |
+| 0.0 | +0.02203028 | -0.22464604 | 0.03499 | 0.32970 | 0.76923542 | 0.60685667 | 0.22352864 |
+
+**Interpretation.**
+- `weight_decay=1` materially suppresses the useful local correction,
+  **especially `d2`**: reducing it substantially improves both PDE loss
+  and solution error.
+- The effect **essentially saturates by `weight_decay≈0.01`** — going all
+  the way to `0.0` changes very little further.
+- **Even with `weight_decay=0`, both amplitudes remain far from the
+  post-hoc solution-error oracle** — `d2` reaches only ~33% of its oracle
+  value, `d1` only ~3.5%.
+- `d1` and `d2` behave **asymmetrically**: `d2` (the negative/right-side
+  Gaussian) grows substantially as weight decay is relaxed, while `d1`
+  (the positive/left-side Gaussian) barely grows at all.
+- **Therefore weight decay contributes to amplitude suppression but does
+  NOT fully explain it.** The remaining, larger mismatch appears to arise
+  from the PDE-training objective itself preferring a substantially
+  different/weaker correction than the `t=1` solution-error oracle does —
+  consistent with, and now sharpened by, the asymmetry between `d1` and
+  `d2`.
+
+This finding should be read as evidence **against** weight decay being
+*the* cause, not evidence *for* it — it is one real, now-quantified
+contributor among others, not a complete explanation.
+
+---
+
+## 29. Updated central question (supersedes Section 25's framing)
+
+Sections 26–28 progressively isolated and ruled out several candidate
+explanations for the weak local-amplitude problem:
+- **representation capacity** is not the bottleneck (Section 26: a
+  well-conditioned K=2 basis explains ~99.8% of the shock residual's
+  variance, confirmed genuine on an independent dense grid, and capacity
+  saturates further by K=8);
+- **sign/direction** is not the bottleneck (Section 27: both `d1,d2`
+  start moving in the correct direction from `d1=d2=0`);
+- **RF/local co-adaptation** cannot explain the remaining amplitude gap
+  (Section 27: the RF is completely frozen throughout, yet the amplitude
+  problem persists);
+- **`WEIGHT_DECAY`** is a real but only **partial** contributor (Section
+  28: removing it entirely still leaves both amplitudes far from useful,
+  and leaves `d1` and `d2` asymmetrically affected).
+
+**Updated central question:** **Why does the unregularized PDE-training
+objective strongly use the negative/right Gaussian (`d2`) but barely use
+the positive/left Gaussian (`d1`), even though the `t=1` solution residual
+requires both** to achieve the representational benefit established in
+Section 26?
+
+This reframes the question from "how large is the amplitude" to "why is
+the objective's preference asymmetric between the two Gaussians," and is
+carried forward into `TODO.md`.
+
+---
+
+## 30. October 7, 2026 meeting checkpoint and advisor directions
+
+**Status at the meeting** (established by Sections 15–29, summarized here
+for continuity — no new experiment in this section).
+
+Representation: the actual PDE-trained RF residual at `t=1` is strongly
+localized and sign-changing near the shock (Section 15). A single shifted
+Gaussian substantially improves the shock residual (Sections 17–19); a
+jointly searched two-Gaussian opposite-sign pair represents it extremely
+well (Section 26, ~99.8% of the shock residual's variance, ≈95.3%
+shock-error improvement); greedy K-Gaussian enrichment through `K=8`
+demonstrates substantial additional representation capacity (Section 26).
+**`K=8` is a representation-capacity diagnostic, not a globally optimized
+8-Gaussian solution** — this distinction is preserved from Section 26 and
+must continue to be preserved in any future K-Gaussian work.
+
+Training: with the canonical RF frozen, PDE training moves the
+two-Gaussian amplitudes initially in the same signs as the `t=1` oracle
+amplitudes (Section 27). `weight_decay=1` strongly suppresses the local
+correction; reducing/removing weight decay improves the learned
+correction, especially the second Gaussian, but does **not** recover the
+`t=1` oracle amplitudes (Section 28). Representation is therefore not the
+main limitation on the learned correction's size. Regularization
+contributes to amplitude suppression, but a large discrepancy remains
+between the multi-time PDE-training objective and the `t=1` solution-error
+oracle (Section 29).
+
+**Important framing, reaffirmed at this meeting:** the oracle and the
+PDE-training objective are genuinely different objectives (the oracle
+minimizes `t=1` solution error only; PDE training minimizes a multi-time
+PDE/IC/BC residual objective). This log does **not** claim that PDE
+training "should" reproduce the oracle amplitudes — the open question
+(Section 29) is why the two objectives' preferences diverge so
+asymmetrically between the two Gaussians, not that they are expected to
+agree.
+
+**Advisor directions from the 2026-10-07 meeting** (see
+`docs/meetings/2026-10-07.md` for the full discussion; none of the below
+have been run yet — recorded here as planned future work, tracked in
+`TODO.md`):
+
+1. **RF basis-size study.** Test the number of random spatial features
+   `N = 500 -> 1000 -> 2000` (handwritten values), comparing global
+   relative L2 and shock-region relative L2, with an error-vs-`N` plot.
+   Purpose: determine whether increasing RF capacity continues to reduce
+   error or plateaus.
+2. **Extend Gaussian enrichment to `K>=8`** for both the post-hoc/oracle
+   representation diagnostics and the PDE-training diagnostics, and
+   jointly with the RF basis-size study (item 1). **The exact N-by-K
+   combinations to run are explicitly TBD** — not yet decided, and should
+   not be treated as a full experimental matrix to run blindly.
+3. **Trainable Gaussian geometry.** Move beyond fixed `(center, width)`
+   geometry to training `{c_k, sigma_k, d_k}` jointly through the PDE
+   objective, for one or more Gaussians. Recorded as a future experiment
+   only.
+4. **Reporting convention.** Consistently report both global relative L2
+   error and shock-region relative L2 error in all experiment comparisons
+   and plots going forward.
+5. **Multiscale RF basis — new hypothesis, not yet tested.**
+   ```
+   u_RF = sum_{k=1}^{N1} a_k cos(w_k^(1) x + b_k^(1))
+        + sum_{k=1}^{N2} beta_k cos(w_k^(2) x + b_k^(2))
+
+   w_k^(1) ~ N(0, sigma_1^2),  w_k^(2) ~ N(0, sigma_2^2),  N = N1 + N2
+   ```
+   Motivation: one RF population may represent smoother spatial structure
+   while a second, different frequency scale may provide additional
+   resolution around the sharp shock. **This is a hypothesis, not an
+   established conclusion.** The handwritten notes appear to contain
+   candidate `N1,N2` values, but their precise interpretation is not
+   settled — marked TBD/confirm with advisor, not invented here.
+
+These five directions are reflected in `TODO.md`'s reordered "Current
+priority" (items A–E) and in new/updated `IDEAS.md` entries for
+multiscale RF, trainable Gaussian geometry, and the N-vs-K interaction
+question.
