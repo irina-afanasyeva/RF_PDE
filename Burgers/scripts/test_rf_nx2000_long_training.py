@@ -1,3 +1,4 @@
+import argparse
 import sys
 from pathlib import Path
 
@@ -84,6 +85,9 @@ import test_fixed_gaussian_correction as tfgc  # noqa: E402 -- reused unchanged:
 # resulting trained weights at every checkpoint are bit-identical to what a
 # single continuous call would have produced.
 
+# NX, OUTPUT_DIR, REPRO_GLOBAL/SMOOTH/SHOCK are set from --nx in main() (see
+# parse_args()/REPRO_REFERENCE below); the values here are only the
+# Nx=2000 defaults used if the script is imported without main() running.
 NX = 2000
 CHECKPOINT_EPOCHS = [1000, 2000, 5000, 10000]
 SEGMENT_LENGTHS = [CHECKPOINT_EPOCHS[0]] + [
@@ -91,14 +95,30 @@ SEGMENT_LENGTHS = [CHECKPOINT_EPOCHS[0]] + [
 ]
 
 REPRO_EPOCH = 1000
-REPRO_GLOBAL = 0.3160344409079877
-REPRO_SMOOTH = 0.27944891957843243
-REPRO_SHOCK = 1.0849605011988503
+# 1000-epoch reproduction-gate reference, per Nx (from the existing
+# sweep_rf_basis_size.py sweep results).
+REPRO_REFERENCE = {
+    1000: {"global": 0.2839157305655459, "smooth": 0.25354926454918303, "shock": 0.9181808292859333},
+    2000: {"global": 0.3160344409079877, "smooth": 0.27944891957843243, "shock": 1.0849605011988503},
+}
+REPRO_GLOBAL = REPRO_REFERENCE[NX]["global"]
+REPRO_SMOOTH = REPRO_REFERENCE[NX]["smooth"]
+REPRO_SHOCK = REPRO_REFERENCE[NX]["shock"]
 VERIFY_RTOL = 1e-4
 
 IC_GRID_N_X = 1000
 
-OUTPUT_DIR = PROJECT_DIR / "outputs" / "rf_nx2000_long_training"
+OUTPUT_DIR = PROJECT_DIR / "outputs" / f"rf_nx{NX}_long_training"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Nx long-training diagnostic (continuous trajectory, checkpoints at "
+        "1000/2000/5000/10000 epochs)."
+    )
+    parser.add_argument("--nx", type=int, choices=[1000, 2000], default=2000)
+    return parser.parse_args()
+
 
 CSV_HEADER = [
     "epoch",
@@ -193,7 +213,7 @@ def verify_reproduction_gate(row):
         "smooth": rel_diff(row["smooth_relative_l2_error"], REPRO_SMOOTH),
         "shock": rel_diff(row["shock_relative_l2_error"], REPRO_SHOCK),
     }
-    print(f"epoch={REPRO_EPOCH} reproduction gate (vs. existing Nx=2000 sweep reference):")
+    print(f"epoch={REPRO_EPOCH} reproduction gate (vs. existing Nx={NX} sweep reference):")
     for k, v in checks.items():
         print(f"  {k}: relative difference = {v:.3e} (tolerance {VERIFY_RTOL:.1e})")
     failed = {k: v for k, v in checks.items() if v > VERIFY_RTOL}
@@ -305,6 +325,20 @@ def print_table(rows):
 
 
 def main():
+    args = parse_args()
+
+    # Rebind the module-level NX/OUTPUT_DIR/REPRO_* globals from --nx, before
+    # anything else runs. All other functions in this script read these as
+    # module globals (looked up at call time), so this is sufficient to
+    # retarget the whole script to the requested Nx without threading an
+    # `nx` parameter through every function signature.
+    global NX, OUTPUT_DIR, REPRO_GLOBAL, REPRO_SMOOTH, REPRO_SHOCK
+    NX = args.nx
+    OUTPUT_DIR = PROJECT_DIR / "outputs" / f"rf_nx{NX}_long_training"
+    REPRO_GLOBAL = REPRO_REFERENCE[NX]["global"]
+    REPRO_SMOOTH = REPRO_REFERENCE[NX]["smooth"]
+    REPRO_SHOCK = REPRO_REFERENCE[NX]["shock"]
+
     # Must be set before any grid is built or model is constructed -- see
     # RESEARCH_LOG.md's dtype lesson from plot_rf_basis_size_solutions.py.
     torch.set_default_dtype(DTYPE)
