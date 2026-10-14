@@ -86,7 +86,11 @@ import sweep_rf_basis_size as sweep  # noqa: E402 -- reused unchanged: build_com
 N_CANONICAL = 250
 N_HIGH = 250
 SIGMA_CANONICAL = SIGMA_X  # population 1: unchanged canonical scale (0.04)
-SIGMA_HIGH = 0.0032        # population 2: principled first diagnostic choice (see design report)
+# Follow-up experiment: gentler second frequency scale than the first
+# multiscale run (sigma_high=0.0032, std=312.5, in
+# outputs/rf_multiscale_two_population/ -- NOT overwritten, see OUTPUT_DIR
+# below). ONLY this constant changed relative to that run.
+SIGMA_HIGH = 1 / 75  # std(W_high) = 75
 
 CANONICAL_GLOBAL = 0.27149430095802507
 CANONICAL_SMOOTH = 0.2443827084159696
@@ -96,7 +100,9 @@ IC_GRID_N_X = 1000
 UNDERLYING_SAMPLE_RTOL = 1e-10
 UNDERLYING_SAMPLE_ATOL = 1e-12
 
-OUTPUT_DIR = PROJECT_DIR / "outputs" / "rf_multiscale_two_population"
+# Distinct output directory so the completed sigma_high=0.0032 (std=312.5)
+# results are never overwritten.
+OUTPUT_DIR = PROJECT_DIR / "outputs" / "rf_multiscale_two_population_std75"
 
 CSV_HEADER = [
     "population", "count", "mean", "std", "min_abs_W", "max_abs_W",
