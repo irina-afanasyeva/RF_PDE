@@ -10,6 +10,7 @@ if str(PROJECT_DIR) not in sys.path:
 if str(PROJECT_DIR / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR / "scripts"))
 
+from burgers_rf.config import DTYPE  # noqa: E402
 from burgers_rf.evaluation import evaluate_error_metrics  # noqa: E402
 import sweep_rf_basis_size as sweep  # noqa: E402 -- reused unchanged: reconstruct_model_from_checkpoint,
 # OUTPUT_DIR, NX_VALUES. This script does NOT retrain, does NOT modify
@@ -111,6 +112,16 @@ def print_comparison_table(rows):
 
 
 def main():
+    # Must be set before any grid is built: sweep_local_width.build_shock_grid
+    # calls torch.linspace with no explicit dtype, so it silently follows
+    # whatever torch's ambient default dtype is at that moment. Every other
+    # script in this project sets this as the first line of main() for
+    # exactly this reason -- omitting it here caused a float64/float32
+    # cartesian_prod dtype mismatch in build_shock_grid on a fresh
+    # interpreter (where no prior code had already set it), and would also
+    # have silently downcast the reconstructed model's RF linear weight to
+    # float32 via copy_().
+    torch.set_default_dtype(DTYPE)
     device = "cpu"
     rows = []
 
