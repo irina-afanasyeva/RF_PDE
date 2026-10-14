@@ -1,4 +1,5 @@
 import argparse
+import copy
 import sys
 from pathlib import Path
 
@@ -397,7 +398,34 @@ def main():
         rows.append(row)
         write_csv(rows)
 
-        baseline = ptgc.build_search_baseline(model, device)
+        # build_search_baseline (test_pde_trained_gaussian_correction.py)
+        # builds its internal x/t evaluation tensors via bare torch.tensor(
+        # ...)/torch.full_like(...) with NO .to(device) call, so it only
+        # works correctly when `model` itself is on CPU -- every existing
+        # caller in this project passes device="cpu" for exactly this
+        # reason. This script trains on CUDA, so the live model cannot be
+        # passed to it directly (this was the root cause of the device
+        # mismatch).
+        #
+        # We must NOT move the LIVE model/optimizer to CPU and back either:
+        # nn.Module.to() does not move the optimizer's internal per-
+        # parameter state (Adam's exp_avg/exp_avg_sq buffers), so doing so
+        # would silently leave those buffers on the wrong device and crash
+        # the NEXT training segment's optimizer.step().
+        #
+        # Instead, use an INDEPENDENT deep copy of the model, moved to CPU.
+        # copy.deepcopy on an nn.Module performs a pure data copy (new
+        # tensor objects, same values, via Tensor.__deepcopy__) -- it does
+        # NOT call BurgersRF.__init__ and therefore consumes ZERO random
+        # numbers, so it cannot perturb the RNG stream used by subsequent
+        # training segments. (sweep.reconstruct_model_from_checkpoint was
+        # considered instead, but its throwaway BurgersRF(...) construction
+        # DOES consume random numbers to build its own placeholder
+        # Wx/Wt/bx/bt before they are overwritten -- unsafe to call between
+        # training segments here.) The live `model`/`optimizer` objects are
+        # never touched by this.
+        cpu_model_for_plots = copy.deepcopy(model).to("cpu")
+        baseline = ptgc.build_search_baseline(cpu_model_for_plots, "cpu")
         t1_metrics = evaluate_error_metrics(
             baseline["x_eval_full"], baseline["y_eval_full"], baseline["u_RF_full"],
             baseline["y_eval_shock"], baseline["u_RF_shock"],
