@@ -424,7 +424,39 @@ def main():
         # Wx/Wt/bx/bt before they are overwritten -- unsafe to call between
         # training segments here.) The live `model`/`optimizer` objects are
         # never touched by this.
+        #
+        # IMPORTANT ADDITIONAL FIX: .to("cpu") on the whole module is NOT
+        # sufficient by itself. model.py constructs Wx/Wt/bx/bt as
+        # `nn.Parameter(tensor, requires_grad=False).to(device)`. When
+        # `device` triggers a genuine conversion (e.g. CPU->CUDA on the
+        # real GPU server), Tensor.to() returns a PLAIN torch.Tensor rather
+        # than a Parameter (same mechanism as the known checkpoint bug in
+        # RESEARCH_LOG.md Section 16), and nn.Module.__setattr__ then
+        # stores it as an ordinary instance attribute -- NOT registered in
+        # _parameters/_buffers. nn.Module.to() only moves registered
+        # parameters/buffers/submodules, so it is structurally BLIND to
+        # Wx/Wt/bx/bt in that case: they are copied by deepcopy (which
+        # copies the whole __dict__, not just registered parameters) but
+        # remain on the ORIGINAL device after .to("cpu"). (On CPU-only
+        # construction -- the only case reachable in local testing -- this
+        # .to(device) call is always a no-op, so Wx/Wt/bx/bt stay genuine
+        # Parameters and the bug is invisible; it only manifests with a
+        # real device conversion.) Explicitly moving each one individually
+        # fixes this. IMPORTANT: if Wx/Wt/bx/bt happen to still be genuine
+        # registered Parameters (the CPU-only / non-buggy case),
+        # nn.Module.__setattr__ refuses to reassign an already-registered
+        # parameter name to a plain Tensor (raises TypeError) -- so each
+        # attribute must be deleted first (nn.Module.__delattr__ handles
+        # this correctly whether or not the name was registered) before
+        # being reassigned to its .detach().cpu().clone() (same pattern
+        # already used in sweep.build_complete_checkpoint). This is correct
+        # and safe regardless of whether they are Parameters or plain
+        # Tensors, and regardless of their current device.
         cpu_model_for_plots = copy.deepcopy(model).to("cpu")
+        for attr_name in ("Wx", "Wt", "bx", "bt"):
+            cpu_value = getattr(cpu_model_for_plots, attr_name).detach().cpu().clone()
+            delattr(cpu_model_for_plots, attr_name)
+            setattr(cpu_model_for_plots, attr_name, cpu_value)
         baseline = ptgc.build_search_baseline(cpu_model_for_plots, "cpu")
         t1_metrics = evaluate_error_metrics(
             baseline["x_eval_full"], baseline["y_eval_full"], baseline["u_RF_full"],
