@@ -1,4 +1,5 @@
 import copy
+import gc
 import sys
 from pathlib import Path
 
@@ -56,8 +57,17 @@ import test_fixed_gaussian_correction as tfgc  # noqa: E402 -- reused unchanged:
 # Configurations run smallest-to-largest so a partial run (meeting
 # interruption) still leaves useful completed results. summary.csv is
 # rewritten after EVERY completed configuration, not only at the end.
+#
+# EXTENSION (2026-10-21, same session): added 7 larger configurations,
+# same Nx/Nt=50 ratio, same methodology -- no scientific/architecture
+# change. The script now RESUMES from an existing outputs/summary.csv:
+# already-completed configs (by exact (Nx,Nt) match) are detected and
+# skipped, never retrained; their rows are carried forward unchanged.
 
-CONFIGS = [(50, 1), (100, 2), (250, 5), (500, 10), (750, 15), (1000, 20)]
+CONFIGS = [
+    (50, 1), (100, 2), (250, 5), (500, 10), (750, 15), (1000, 20),
+    (1250, 25), (1500, 30), (2000, 40), (2500, 50), (3000, 60), (3500, 70), (4000, 80),
+]
 CANONICAL_CONFIG = (500, 10)
 
 CANONICAL_GLOBAL = 0.27149430095802507
@@ -176,6 +186,39 @@ def verify_reproduction_gate(row):
     print("Reproduction gate PASSED.")
 
 
+_CSV_INT_COLUMNS = {"Nx", "Nt", "n_coefficients"}
+
+
+def load_existing_results():
+    """Parse an existing summary.csv (same format write_csv produces) into
+    the same row-dict structure used throughout this script. Returns []
+    if no summary.csv exists yet (fresh run). Used ONLY to detect already-
+    completed configurations for resume -- never retrains or modifies
+    them."""
+    path = OUTPUT_DIR / "summary.csv"
+    if not path.exists():
+        return []
+    rows = []
+    with path.open() as f:
+        header = f.readline().strip().split(",")
+        if header != CSV_HEADER:
+            raise RuntimeError(
+                f"Existing {path} header {header} does not match the expected "
+                f"{CSV_HEADER}. Refusing to resume from a mismatched summary file."
+            )
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            row = {
+                k: (int(v) if k in _CSV_INT_COLUMNS else float(v))
+                for k, v in zip(CSV_HEADER, parts)
+            }
+            rows.append(row)
+    return rows
+
+
 def write_csv(rows):
     path = OUTPUT_DIR / "summary.csv"
     with path.open("w") as f:
@@ -270,6 +313,10 @@ def print_table(rows):
         print(" | ".join(f"{v:>11}" for v in vals))
 
 
+def _is_oom_error(exc):
+    return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+
 def main():
     torch.set_default_dtype(DTYPE)
     device = get_device()
@@ -277,9 +324,44 @@ def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    rows = []
+    # RESUME: load already-completed configurations from the existing
+    # summary.csv (if any) -- their results are carried forward EXACTLY as
+    # saved and are NEVER retrained.
+    rows = load_existing_results()
+    completed_configs = {(row["Nx"], row["Nt"]) for row in rows}
+    if rows:
+        print(f"Resuming: {len(rows)} already-completed configuration(s) found: "
+              f"{sorted(completed_configs)}")
+        for row in rows:
+            missing = not (OUTPUT_DIR / f"checkpoint_nx{row['Nx']}_nt{row['Nt']}.pt").exists()
+            if missing:
+                print(f"  WARNING: summary.csv has a row for Nx={row['Nx']},Nt={row['Nt']} "
+                      "but its checkpoint file is missing on this machine.")
+        canonical_row = next((r for r in rows if (r["Nx"], r["Nt"]) == CANONICAL_CONFIG), None)
+        if canonical_row is not None:
+            verify_reproduction_gate(canonical_row)  # integrity check on the carried-forward result
+
     for nx, nt in CONFIGS:
-        row, checkpoint, baseline = run_one_config(nx, nt, device)
+        if (nx, nt) in completed_configs:
+            print(f"Skipping already-completed config Nx={nx}, Nt={nt} (found in existing summary.csv).")
+            continue
+
+        relative_size = (nx * nt) / (CANONICAL_CONFIG[0] * CANONICAL_CONFIG[1])
+        print(f"=== starting Nx={nx}, Nt={nt} (Nx*Nt={nx * nt}), "
+              f"{relative_size:.2f}x the canonical 500x10 coefficient count ===")
+
+        try:
+            row, checkpoint, baseline = run_one_config(nx, nt, device)
+        except RuntimeError as exc:
+            if _is_oom_error(exc):
+                print(f"CUDA OUT OF MEMORY at Nx={nx}, Nt={nt}: {exc}")
+                print("Stopping the sweep here -- NOT proceeding to larger configurations. "
+                      "All earlier results remain in summary.csv/summary.txt and their "
+                      "checkpoints; scientific settings were not altered.")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                break
+            raise
 
         if (nx, nt) == CANONICAL_CONFIG:
             verify_reproduction_gate(row)
@@ -292,6 +374,15 @@ def main():
                       row["t1_global_relative_l2_error"], "t=1 global relative L2")
         plot_solution(nx, nt, baseline, "shock", "x_eval_shock", "y_eval_shock", "u_RF_shock",
                       row["t1_shock_relative_l2_error"], "t=1 shock relative L2")
+
+        # Explicit cleanup between configurations: run_one_config's model/
+        # optimizer/training tensors are function-local and already out of
+        # scope at this point; this just returns the now-free CUDA blocks
+        # to the allocator's pool before the next (larger) config runs.
+        del row, checkpoint, baseline
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     write_summary(rows)
     plot_error_vs_coefficient_count(rows)
