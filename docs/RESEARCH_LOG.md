@@ -1266,3 +1266,323 @@ These five directions are reflected in `TODO.md`'s reordered "Current
 priority" (items A–E) and in new/updated `IDEAS.md` entries for
 multiscale RF, trainable Gaussian geometry, and the N-vs-K interaction
 question.
+
+---
+
+## 31. RF basis-size sweep
+
+**Hypothesis.** Per the 2026-10-07 advisor direction (Section 30, item 1):
+test whether increasing the number of spatial random features (`Nx`)
+continues to reduce error, or whether it plateaus.
+
+**Experiment.** RF-only (`use_local=False`) canonical training at
+`Nx = 500, 1000, 2000`, with `Nt=10`, seed=42, and all other settings
+(collocation counts, optimizer, `LR`, `WEIGHT_DECAY`, `IC_BC_WEIGHT`,
+1000 epochs) held fixed at their `config.py` values — isolating feature
+*count* only. Script: `Burgers/scripts/sweep_rf_basis_size.py` (`0ca03dc`).
+Numerical results below were supplied from the actual server run; they
+have not been independently re-run locally (no GPU/CUDA available on this
+machine, and the real checkpoints/outputs are gitignored and not present
+here).
+
+**Result:**
+```
+Nx=500:  global=0.27149430095802507, smooth=0.2443827084159696, shock=0.8390487998889169, PDE loss=0.23590008351925892
+Nx=1000: global=0.2839157305655459,  smooth=0.25354926454918303, shock=0.9181808292859333, PDE loss=0.22939219902001096
+Nx=2000: global=0.3160344409079877,  smooth=0.27944891957843243, shock=1.0849605011988503, PDE loss=0.22558102432851115
+```
+
+**Observation.** Under this fixed 1000-epoch canonical training setup,
+increasing `Nx` did **not** improve solution accuracy — global, smooth,
+and shock error all *increased* with `Nx` — even though the sampled PDE
+loss *decreased*.
+
+**Important limitations (do not over-read this result):**
+- only seed 42 was used;
+- `Nt` remained fixed at 10 throughout (only `Nx` varied);
+- optimization/training-budget effects remain possible (see Section 32);
+- the interior collocation points were controlled (bit-identical across
+  `Nx`, since `sample_training_points` runs before model construction —
+  see Section 23's RNG analysis), but `BurgersRF.__init__` draws an
+  `Nx`-dependent number of random values for `Wx`/`bx`, so the per-epoch
+  BC/IC resampling trajectory was **not** identical across the three `Nx`
+  cases — this is an inherent, already-documented consequence of `Nx`
+  itself changing the model's RNG footprint (see `sweep_rf_basis_size.py`'s
+  own summary note), not a new confound.
+
+**Interpretation.** Do **not** conclude that larger RF bases are
+inherently worse — the result is specific to this single-seed,
+fixed-`Nt`, fixed-training-budget setup. This question is reopened and
+broadened in Section 35 following the 2026-10-14 advisor meeting.
+
+---
+
+## 32. Nx=1000 longer-training diagnostic
+
+**Hypothesis.** Does Section 31's Nx=1000 degradation reflect insufficient
+training duration rather than a genuine capacity/optimization issue?
+
+**Experiment.** One continuous training trajectory for the Nx=1000 model,
+checkpointed at 1000, 2000, 5000, and 10000 epochs (no restart between
+checkpoints — same model/optimizer objects throughout, with RNG-safe,
+deterministic intermediate diagnostics). Script:
+`Burgers/scripts/test_rf_nx2000_long_training.py --nx 1000` (`5f576de`,
+`c6b259f`, `0e4cd42`, `0b740f1`). As in Section 31, these numbers were
+supplied from the actual server run and have not been independently
+re-run locally.
+
+**Result:**
+```
+epoch 1000:  global=0.2839157305655459,  smooth=0.25354926454918303, shock=0.9181808292859333, PDE=0.22939219902001096
+epoch 2000:  global=0.2794635841570797,  smooth=0.2496847216718783,  shock=0.8992185808186575, PDE=0.21611259274922276
+epoch 5000:  global=0.2800984603045993,  smooth=0.25071616222435966, shock=0.8945062214766912, PDE=0.2141470907329272
+epoch 10000: global=0.27907511488597353, smooth=0.2494314600182936,  shock=0.8963994256493268, PDE=0.20236475819643004
+```
+
+**Interpretation.** Longer training gives only modest improvement, and
+Nx=1000 at 10,000 epochs still does **not** outperform the canonical
+Nx=500 result at 1,000 epochs (Section 31: shock=0.8390488). Therefore the
+simple explanation "larger `Nx` only needs more epochs" is **weakened** as
+the primary explanation for Section 31's result, but **not universally
+ruled out** — other training configurations (learning rate, `Nt`, seed)
+remain untested.
+
+---
+
+## 33. Frozen-RF K=8 Gaussian PDE training
+
+**Hypothesis.** Section 26 established that a jointly-fit K=8 Gaussian
+basis has very strong post-hoc representational capacity for the `t=1`
+shock residual. With the canonical Nx=500 RF completely frozen (same
+protocol as Section 27's K=2 case, now generalized to K=8), can PDE
+training learn a correction that approaches this capacity?
+
+**Experiment.** `u = u_RF + t * sum_{k=1}^{8} d_k G_k(x)`, with the exact
+K=8 Gaussian geometry recovered from the Section 26 greedy capacity study,
+RF completely frozen (zero trainable model parameters, verified), only
+the 8 scalar amplitudes `d_k` trainable (initialized at exactly zero),
+`WEIGHT_DECAY=0` (experiment-local, not `config.py`'s canonical value — a
+deliberate controlled change, following Section 28's weight-decay
+finding). Script:
+`Burgers/scripts/test_two_stage_k8_gaussian_local_feature.py` (`0d43f54`).
+As above, these result numbers were supplied from the actual server run
+and have not been independently re-run locally.
+
+**Result (at `t=1`):**
+```
+RF-only:          global=0.229241985245, smooth=0.186308682793, shock=0.759747070945
+PDE-trained K=8:  global=0.226182356002, smooth=0.185368843075, shock=0.738366522323
+Oracle/post-hoc:  global=0.155196900281, smooth=0.157785446046, shock=0.003397832223
+```
+The RF-only values match Section 17's already-documented `t=1` fine-grid
+baseline to the precision given.
+
+**IMPORTANT — two similar but distinct numbers, do not merge:** the
+oracle/post-hoc K=8 shock error here (`0.003397832223`) comes from a
+**fresh** joint-least-squares refit on the fitting grid, computed inside
+`test_two_stage_k8_gaussian_local_feature.py` itself. This is a **different
+diagnostic** from Section 26's own K=8 dense-grid *validation* shock error
+(`≈0.0033113`), which came from the original greedy capacity script's
+independent dense grid. The two values are close (as expected, since both
+describe the same underlying K=8 basis' representational capacity) but are
+not the same computation and should not be conflated.
+
+**Observation.** Comparing against Section 27's earlier K=2 frozen-RF
+result: K=2's PDE-trained `t=1` shock error was `0.7170982076598021` —
+*better* (lower) than this K=8 result's PDE-trained shock error
+(`0.738366522323`), despite K=8's dramatically stronger post-hoc
+representational capacity. This is worth stating explicitly: a richer
+post-hoc basis did not translate into a better PDE-trained outcome here.
+
+**Interpretation.** The K=8 Gaussian basis has strong representational
+capacity (confirmed independently in Section 26 and again here via the
+fresh oracle fit), but PDE training activates it only weakly — the
+PDE-trained correction captures only a small fraction of the available
+post-hoc improvement. Because the RF was completely frozen throughout,
+**RF/local co-adaptation is excluded as the primary explanation** in this
+specific experiment (consistent with Section 27's K=2 finding). Do **not**
+claim that the PDE objective itself is definitively wrong — finite
+collocation, the `t*d_k` temporal restriction, loss weighting, and
+optimization dynamics all remain possible contributors (see Section 29's
+still-open amplitude-asymmetry question and `IDEAS.md` item 21's four-axis
+framework).
+
+---
+
+## 34. Two-population multiscale RF experiments
+
+Following the 2026-10-07 meeting's multiscale hypothesis (Section 30, item
+5; `IDEAS.md` item 19), both experiments below modify **only** the
+frequency content of the canonical Nx=500 spatial RF basis, via
+`Burgers/scripts/test_rf_multiscale_two_population.py`. In both,
+`Nx_total=500`, `Nt=10`; population 1 (the first 250 spatial frequencies)
+is **unchanged** from the canonical seed-42 realization; population 2 (the
+remaining 250) is **rescaled** from the same underlying random draw, not
+redrawn. As in prior sections, these result numbers were supplied from the
+actual server runs and have not been independently re-run locally.
+
+**Sigma convention (stated explicitly to avoid ambiguity).** The original
+implementation constructs
+```
+Wx = Z / sigma_x,   Z ~ N(0,1)
+```
+therefore
+```
+std(Wx) = 1 / sigma_x.
+```
+Canonical `sigma_x = 0.04` therefore corresponds to spatial frequency
+`std = 25`. This convention comes from the original RF implementation
+(`burgers_rf/model.py`), not from the multiscale modification.
+
+**Experimental control (both experiments below).** The canonical
+seed-42 construction trajectory (`set_seed(42) → sample_training_points →
+BurgersRF(...)`) is reproduced exactly; `Wt`, `bx`, `bt`, and the initial
+`model.0.weight` are bit-identical to the canonical single-population
+model (verified via explicit control assertions in the script, including a
+check that the global RNG state immediately before training is unchanged
+from the canonical trajectory); training points, optimizer, LR, training
+budget (1000 epochs), and canonical weight decay are all unchanged. The
+**only** varied factor is the frequency scale applied to the second
+population of 250 spatial frequencies.
+
+### 34.1 Aggressive high-frequency population
+
+**Setup.** Population 1: 250 features at frequency std=25 (canonical).
+Population 2: 250 features at frequency std=312.5 (`sigma_high=0.0032`).
+Commit: `1fc94d5`.
+
+**Result:**
+```
+global=0.340315446922357, smooth=0.3083824300111887, shock=1.0643488610679261, PDE=0.3517382024333927
+```
+
+**Interpretation.** This aggressive high-frequency population
+substantially **worsened** both solution accuracy and PDE residual
+relative to the canonical single-population baseline (Section 31's
+Nx=500 row). Do **not** conclude that multiscale RF fails in general —
+this is one specific, aggressive frequency choice.
+
+### 34.2 Moderate high-frequency population
+
+**Setup.** Population 1: 250 features at frequency std=25 (canonical,
+unchanged). Population 2: 250 features at frequency std=75
+(`sigma_high=1/75`). Commit: `981a296`.
+
+**Result (canonical multi-time metrics):**
+```
+global=0.24041498078112022, smooth=0.21231193413050437, shock=0.7900926655681234, PDE=0.1929321794963624
+```
+
+**Result (`t=1`-only):**
+```
+global=0.21680942270573933, smooth=0.177349557330002, shock=0.7071530431716319
+```
+
+**Comparison to canonical Nx=500 (Section 31):**
+```
+canonical: global=0.27149430095802507, smooth=0.2443827084159696, shock=0.8390487998889169, PDE=0.23590008351925892
+```
+
+**Interpretation.** This is the **first controlled positive multiscale
+result**: with the same total `Nx=500`, redistributing spatial frequency
+content (rather than changing the total feature count) improved global,
+smooth, shock, *and* PDE-loss metrics simultaneously, relative to the
+single-population canonical baseline. This provides evidence that
+frequency *allocation* matters, not just total count. Do **not** describe
+`sigma_high` corresponding to std=75 as optimal — it is one successful
+moderate-scale diagnostic, not a tuned result (see Section 35's advisor
+direction to study this systematically).
+
+---
+
+## 35. October 14, 2026 meeting checkpoint and advisor directions
+
+**Status at the meeting.** Sections 31–34 above were presented: the RF
+basis-size sweep showed solution error *increasing* with `Nx` under the
+fixed canonical training budget (Section 31); longer training only
+partially explained this (Section 32); a K=8 frozen-RF local correction
+had strong post-hoc capacity but weak PDE-trained activation (Section 33);
+and a moderate multiscale frequency split gave the first positive
+multiscale result while an aggressive split made things worse (Section
+34).
+
+**Advisor's central conclusion.** The current `u_RF` itself is not
+sufficiently accurate. The advisor expects a well-constructed RF
+approximation to reproduce the *smooth* portions of the Burgers solution
+well, with the principal approximation difficulty concentrated near the
+shock — and reports that his own RF solution achieves this better than the
+current implementation. **Therefore the immediate research priority shifts
+from increasingly complex local Gaussian corrections to first understanding
+and improving the baseline RF approximation itself.**
+
+**Updated central question (supersedes the amplitude-asymmetry framing of
+Section 29 as the *immediate* priority, without invalidating it as a
+question):**
+
+**Why is `u_RF` not producing a sufficiently accurate approximation of the
+smooth part of the Burgers solution, and how can the baseline RF itself be
+improved?**
+
+**Advisor directions:**
+1. **RF size/convergence study is not yet sufficient.** Section 31 used
+   only seed 42 with `Nt` fixed at 10. Directions: run multiple random
+   seeds (e.g. 20, 21, ...); investigate `Nx` and `Nt` jointly, possibly
+   with a controlled `Nx`/`Nt` ratio; investigate a substantially broader
+   RF-size range. **The exact `Nx`/`Nt` grid is explicitly TBD** — not
+   decided, do not invent specific values.
+2. **Optimization diagnostic:** try a smaller learning rate, as a
+   controlled diagnostic of `u_RF` quality — isolated from other
+   architecture changes, not combined with them in the same run.
+3. **Multiscale RF, more systematically.** Continue the two-population
+   investigation (Section 34), but σ1/σ2 should be selected in a
+   principled way — ultimately informed by PDE structure rather than
+   chosen arbitrarily — and the `N1`/`N2` allocation, and total `N`,
+   should themselves be investigated. Explicitly: do **not** interpret the
+   successful std=75 result (Section 34.2) as having found the correct or
+   optimal scales.
+4. **Alternative joint space-time RF formulation.** Proposed as an idea to
+   test, not an established improvement: replace the current separable
+   product features
+   ```
+   phi_ij(x,t) = cos(wx_i*x + bx_i) * cos(wt_j*t + bt_j)
+   u_RF(x,t) = sum_i sum_j c_ij phi_ij(x,t)
+   ```
+   with a single joint cosine over concatenated `(x,t)`:
+   ```
+   phi_k(x,t) = cos(wx_k*x + wt_k*t + b_k)
+   u_RF(x,t) = sum_k c_k phi_k(x,t)
+   ```
+   A fair comparison budget between the separable `Nx*Nt`-coefficient
+   representation and a joint `N`-feature representation is **not** the
+   same by default and is explicitly **TBD** — do not invent the
+   comparison protocol yet.
+5. **Local Gaussian correction / boundary conditions clarification.** For
+   `u_local(x,t) = t * sum_k d_k G_k(x)`, `u_local(x,0)=0` holds exactly —
+   but the Gaussian local correction does **not** analytically satisfy the
+   Burgers boundary condition at `x=±1`. For narrow Gaussians centered near
+   `x=0` the contribution at `x=±1` is numerically extremely small (as
+   already measured for the canonical geometry — `G(±1)` underflows to
+   exactly `0.0` in float64 at the widths used in this study, Section 23),
+   but it is not identically zero by construction. Relevant to future
+   local-feature formulation, not an immediate action item.
+6. **Trainable local Gaussian parameters — postponed.** Do **not** proceed
+   yet with making local Gaussian center `c`, width `sigma`, and amplitude
+   `d` jointly trainable (`TODO.md`'s prior item D). The immediate priority
+   is to make the RF baseline work well first; this item is deprioritized,
+   not abandoned.
+7. **Code sharing:** share the GitHub `burgers-local-features` branch with
+   the advisor so implementations can be directly compared.
+
+**New research structure going forward (not a finalized experimental
+order — a structured summary of open directions):**
+
+- **Phase A — understand and improve `u_RF`:** compare the current
+  implementation/setup against the advisor's better RF result; multi-seed
+  testing; systematic `Nx`/`Nt` study; learning-rate diagnostic; systematic
+  multiscale frequency-scale/allocation study; joint vs. separable
+  space-time RF comparison.
+- **Phase B — localized shock enrichment:** resumed only after Phase A
+  produces a satisfactory smooth-region `u_RF` approximation; then
+  reconsider local basis design and PDE training of `u_local`, including
+  the still-open `d1`/`d2` amplitude-asymmetry question (Section 29) and
+  the deprioritized trainable-geometry item.

@@ -3,86 +3,83 @@
 Actionable research plan. See `RESEARCH_LOG.md` for the numerical results and
 reasoning behind each item; this file tracks priority and status only.
 
-## Current priority
+## Current priority — Phase A: improve/understand u_RF
 
-**Following the 2026-10-07 advisor meeting** (`docs/meetings/2026-10-07.md`;
-`RESEARCH_LOG.md` Section 30), the immediate execution order is A–E below.
-The still-open `d1`/`d2` asymmetry question from before the meeting
-(previously item 1) is **not dropped** — it is carried forward as the
-scientific motivation for item C and the diagnostics listed under it.
+**Following the 2026-10-14 advisor meeting** (`docs/meetings/2026-10-14.md`;
+`RESEARCH_LOG.md` Section 35), the research priority has shifted: the
+immediate problem is the quality of the baseline RF approximation `u_RF`
+itself, not further local-correction complexity. Return to local shock
+enrichment (the former Phase, items now moved to "Later / deprioritized"
+below) only once a satisfactory smooth-region `u_RF` is established.
 
-**A. RF basis-size baseline study: N = 500, 1000, 2000.**
+**A. Compare the current RF implementation/setup against the advisor's
+better RF solution**, once shared, to identify what differs.
 
-Advisor-specified values. Train the RF-only baseline at each `N` (all
-other settings controlled/unchanged), reporting both global relative L2
-and shock-region relative L2 for each. This fulfills and concretizes the
-earlier "increase RF feature count" diagnostic (previously item 6).
+**B. Multi-seed RF study.** The basis-size sweep (completed, see below) used
+only seed=42. Run multiple seeds (advisor mentioned e.g. 20, 21, ... as
+examples) to separate "poor particular random realization" from a
+systematic capacity/training issue.
 
-**B. Plot global and shock relative L2 error versus N.**
+**C. Systematic Nx/Nt convergence study**, investigating Nx and Nt
+jointly rather than Nx alone (the completed sweep fixed Nt=10), possibly
+with a controlled Nx/Nt ratio, over a substantially broader RF-size range.
+**The exact Nx/Nt grid is explicitly TBD** — not decided at the meeting; do
+not invent specific values.
 
-One error-vs-`N` plot (both metrics on it), using the results from A, to
-determine whether increasing RF capacity continues to reduce error or
-whether it plateaus.
+**D. Smaller-learning-rate diagnostic**, as a controlled test of `u_RF`
+quality — kept isolated from other architecture changes in the same run,
+not combined with them.
 
-**C. Design the `K>=8` PDE-training experiment in light of the
-capacity-study result (A/B).**
+**E. Systematic multiscale RF study.** Extends the two completed
+diagnostics (below): select sigma1/sigma2 in a principled way — ultimately
+informed by PDE structure rather than chosen arbitrarily — and
+investigate the N1/N2 allocation between populations and the effect of
+increasing total N. **Do not treat the completed std=75 result as having
+found the correct or optimal scales** — exact future values/grid TBD.
 
-Extend Gaussian enrichment to `K>=8` for both the post-hoc/oracle
-representation diagnostics and the PDE-training diagnostics (advisor
-direction), informed by whichever RF feature count A/B motivates. **The
-exact N-by-K combinations to run are TBD** — not yet decided, and this
-should not be expanded into a full N×K matrix without further
-confirmation. This also continues the still-open question of why the
-frozen-RF PDE objective favors `d2` far more than `d1`
-(`RESEARCH_LOG.md` Section 29) — a richer `K>=8` basis gives another angle
-on that question, not a replacement for it.
-
-**Possible future diagnostics for the `d1`/`d2` asymmetry question**
-(`RESEARCH_LOG.md` Section 29 — not yet run, remain open questions, not
-conclusions):
-- analyze the PDE-loss contributions/gradients separately for `G1` versus
-  `G2`, to see whether the objective's local gradient structure itself is
-  asymmetric between the two Gaussians;
-- compare the PDE-training objective's optimum in the full `(d1,d2)` plane
-  against the solution-error optimum (extending Section 23's 1-D sweep to
-  2-D), to see whether the objective's preferred point is itself
-  asymmetric or whether optimization dynamics are responsible;
-- only later return to joint RF+local training with a richer basis.
+**F. Joint space-time RF formulation, as an idea to test (not an
+established improvement):**
+```
+phi_k(x,t) = cos(wx_k*x + wt_k*t + b_k)   (joint, one feature per k)
+```
+versus the current separable product form
+```
+phi_ij(x,t) = cos(wx_i*x+bx_i) * cos(wt_j*t+bt_j)
+```
+**A fair comparison budget between the separable `Nx*Nt`-coefficient
+representation and a joint `N`-feature representation is explicitly TBD**
+— do not invent the comparison protocol yet.
 
 ## Next
 
-**D. Trainable Gaussian geometry: train center `c`, width `sigma`, and
+**G. Investigate the structure/conditioning of the PDE residual near the
+shock**, as a possible contributor to both the Phase-A `u_RF` quality
+question and the still-open local-amplitude questions below.
+
+## Later / deprioritized (Phase B — resume after a satisfactory u_RF baseline)
+
+**H. Trainable Gaussian geometry: train center `c`, width `sigma`, and
 amplitude `d` jointly through the PDE objective** (generalizes to
 `{c_k, sigma_k, d_k}` for multiple Gaussians).
 
-Advisor direction (2026-10-07 meeting); supersedes/extends the earlier
-"trainable center and width" item (previously item 3) by also training the
-amplitude. Recorded as a future experiment, not yet attempted — only after
-the amplitude/capacity questions above (A–C) are further understood.
+**Explicitly deprioritized/postponed per the 2026-10-14 advisor
+direction** (`RESEARCH_LOG.md` Section 35, item 6) — not abandoned, but
+not the next experiment. Revisit only after Phase A establishes a good
+`u_RF` baseline.
 
-**E. Multiscale/two-population RF experiment.**
+**I. The still-open `d1`/`d2` amplitude-asymmetry question**
+(`RESEARCH_LOG.md` Section 29) and further K-Gaussian PDE-training work
+(Section 33 found K=8 activates only weakly, similar to K=2) — both
+carried forward as Phase B work, not dropped:
+- analyze the PDE-loss contributions/gradients separately per Gaussian;
+- compare the PDE-training objective's optimum in the full `(d1,...,dK)`
+  space against the solution-error optimum;
+- only later return to joint RF+local training with a richer basis.
 
-New hypothesis from the 2026-10-07 meeting (`RESEARCH_LOG.md` Section 30):
-two RF populations at different frequency scales,
-```
-u_RF = sum_k a_k cos(w_k^(1) x + b_k^(1)) + sum_k beta_k cos(w_k^(2) x + b_k^(2))
-```
-with `w_k^(1) ~ N(0,sigma_1^2)`, `w_k^(2) ~ N(0,sigma_2^2)`. Motivation:
-one population for smoother structure, the other for additional shock
-resolution. **Not yet tested; candidate `N1,N2` values from the
-handwritten notes are TBD / need advisor confirmation before
-implementation** — do not invent specific values.
-
-**F. Investigate the structure/conditioning of the PDE residual near the
-shock**, as a possible explanation for the amplitude/asymmetry questions
-above.
-
-## Later
-
-**G. Other local bases** (derivative-of-Gaussian, tanh transition,
+**J. Other local bases** (derivative-of-Gaussian, tanh transition,
 compactly supported bases, possibly a small learned local model).
 
-**H. Separate implementation task: fix `nn.Parameter(...).to(device)`
+**K. Separate implementation task: fix `nn.Parameter(...).to(device)`
 registration in `model.py`.**
 
 Root cause documented in `RESEARCH_LOG.md` Section 16 — on CUDA,
@@ -90,7 +87,11 @@ Root cause documented in `RESEARCH_LOG.md` Section 16 — on CUDA,
 `Tensor`, so they are absent from `state_dict()` on GPU-trained checkpoints.
 Does not affect training correctness (these tensors have
 `requires_grad=False` and were used correctly throughout), only checkpoint
-completeness — not urgent, but should not be forgotten.
+completeness — not urgent, but should not be forgotten. (A related,
+narrower device-handling issue specific to post-hoc diagnostic scripts —
+not `model.py` itself — was found and fixed separately; see
+`test_rf_nx2000_long_training.py`'s and
+`test_rf_multiscale_two_population.py`'s commit history.)
 
 ## After a promising model
 
@@ -176,6 +177,29 @@ Multi-seed validation (not before — single-seed results throughout
   pronounced, unexplained asymmetry between `d1` (~3.5% of oracle) and
   `d2` (~33% of oracle). Weight decay is a real but partial contributor,
   not a full explanation.
+- RF basis-size sweep, Nx in {500,1000,2000}, Nt=10, seed=42 (Section 31)
+  — solution error (global/smooth/shock) *increased* with Nx under the
+  fixed canonical training budget, despite the sampled PDE loss
+  decreasing; single-seed/fixed-Nt limitations motivate Phase A items B/C
+  above.
+- Error-vs-Nx plot (same sweep, Section 31) — generated alongside the
+  above.
+- Nx=1000 longer-training diagnostic, 1000->10000 epochs (Section 32) —
+  only modest improvement; still does not match canonical Nx=500 at 1000
+  epochs; weakens but does not rule out "just needs more epochs."
+- Frozen-RF K=8 Gaussian PDE-training experiment (Section 33) — K=8 has
+  strong post-hoc representational capacity (consistent with Section 26)
+  but PDE training activates it only weakly; RF/local co-adaptation
+  excluded as the explanation (RF completely frozen); notably performed
+  *worse* at t=1 shock error than the earlier K=2 frozen-RF result despite
+  much stronger post-hoc capacity.
+- Two-population multiscale RF, aggressive split: 250@std25 + 250@std312.5
+  (Section 34.1) — substantially worsened solution accuracy and PDE loss
+  relative to canonical Nx=500.
+- Two-population multiscale RF, moderate split: 250@std25 + 250@std75
+  (Section 34.2) — first controlled positive multiscale result: same
+  total Nx=500, better frequency allocation improved global, smooth,
+  shock, and PDE metrics simultaneously. Not claimed optimal.
 
 ## Workflow
 

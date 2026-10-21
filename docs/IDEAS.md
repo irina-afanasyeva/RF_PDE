@@ -47,11 +47,14 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
    experiment.
 
 6. **Trainable Gaussian geometry: center, width, AND amplitude — advisor
-   direction (2026-10-07 meeting, `docs/meetings/2026-10-07.md`).** Extends
-   this earlier "trainable center and width" idea to also train the
-   amplitude `d` jointly through the PDE objective: `{c, sigma, d}` for one
-   Gaussian, generalizing to `{c_k, sigma_k, d_k}` for K Gaussians. Not yet
-   attempted; see `TODO.md` item D.
+   direction (2026-10-07 meeting, `docs/meetings/2026-10-07.md`); now
+   DEPRIORITIZED per the 2026-10-14 meeting.** Extends the earlier
+   "trainable center and width" idea to also train the amplitude `d`
+   jointly through the PDE objective: `{c, sigma, d}` for one Gaussian,
+   generalizing to `{c_k, sigma_k, d_k}` for K Gaussians. Still a valid
+   future idea, retained here, but explicitly postponed until Phase A (RF
+   baseline quality) is resolved — see `RESEARCH_LOG.md` Section 35 and
+   `TODO.md` item H.
 
 7. **Two-stage / residual training — experimentally supported, worth
    retaining as a diagnostic strategy.** Train the RF term first (already
@@ -158,31 +161,45 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
     the PDE objective's optimum in the full `(d1,d2)` plane). Do not
     overstate causality beyond what has actually been tested.
 
-19. **Multiscale / two-population RF basis — new hypothesis from the
-    2026-10-07 meeting, not yet tested.**
+19. **Multiscale / two-population RF basis — hypothesis from the
+    2026-10-07 meeting, now TESTED twice (two directions, see
+    `RESEARCH_LOG.md` Sections 34.1/34.2), with a refined follow-up
+    direction from the 2026-10-14 meeting.**
     ```
     u_RF = sum_{k=1}^{N1} a_k cos(w_k^(1) x + b_k^(1))
          + sum_{k=1}^{N2} beta_k cos(w_k^(2) x + b_k^(2))
 
-    w_k^(1) ~ N(0, sigma_1^2),  w_k^(2) ~ N(0, sigma_2^2),  N = N1 + N2
+    w_k^(1) = z_k^(1) / sigma_1,  z_k^(1) ~ N(0,1)   =>  std(w^(1)) = 1/sigma_1
+    w_k^(2) = z_k^(2) / sigma_2,  z_k^(2) ~ N(0,1)   =>  std(w^(2)) = 1/sigma_2
+    N = N1 + N2
     ```
-    Motivation: one RF population represents smoother spatial structure
-    while a second, different frequency scale provides additional
-    resolution around the sharp shock. **This is a hypothesis, not an
-    established conclusion.** Candidate `N1,N2` values from the advisor's
-    handwritten notes are TBD / need confirmation before implementation —
-    do not invent specific values. See `TODO.md` item E.
+    (Matches the actual RF implementation's inverse-frequency-scale
+    convention, `W = Z/sigma`, `std(W) = 1/sigma` — see `RESEARCH_LOG.md`
+    Section 34's explicit statement of this convention.)
+    Results so far (both with `N1=N2=250`, population 1 fixed at the
+    canonical frequency std=25): an **aggressive** second population
+    (std=312.5) substantially *worsened* global/smooth/shock/PDE metrics
+    (Section 34.1); a **moderate** second population (std=75) *improved*
+    all four metrics simultaneously relative to the canonical
+    single-population baseline — the first controlled positive multiscale
+    result (Section 34.2). **Refined hypothesis (not yet tested):** useful
+    frequency scales and population allocations should be selected
+    systematically, and ideally informed by PDE structure, rather than
+    chosen arbitrarily — per the 2026-10-14 advisor direction. Do **not**
+    treat std=75 as the correct or optimal scale; the N1/N2 allocation and
+    total-N dependence are also still open. See `TODO.md` item E.
 
 20. **Interaction between global RF capacity (N) and local Gaussian
     enrichment (K) — raised at the 2026-10-07 meeting.** The RF
-    basis-size study (`TODO.md` items A/B) and the `K>=8` Gaussian-
-    enrichment study (`TODO.md` item C) are not fully independent:
-    increasing `N` could change the RF-only residual's shape/magnitude
-    near the shock, which would in turn change how much
-    representation/training benefit a K-Gaussian local correction
-    provides. The exact N-by-K experimental design is explicitly **TBD**
-    (`TODO.md` item C) — this item records the conceptual interaction, not
-    a committed experimental matrix.
+    basis-size study (Section 31) and the `K=8` Gaussian-enrichment study
+    (Section 33) are not fully independent: increasing `N` could change
+    the RF-only residual's shape/magnitude near the shock, which would in
+    turn change how much representation/training benefit a K-Gaussian
+    local correction provides. The exact N-by-K experimental design
+    remains **TBD** — this item records the conceptual interaction, not a
+    committed experimental matrix. **Now secondary to Phase A** (see item
+    22 below) — relevant again once the `u_RF` baseline itself is
+    understood.
 
 21. **Proposed diagnostic axes for the amplitude/asymmetry question,
     extending item 18 after the 2026-10-07 meeting.** A fully controlled
@@ -200,7 +217,64 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
     Section 29's asymmetry finding is consistent with a PDE-objective-
     preference explanation, but has not yet been separated from an
     optimization-dynamics explanation. **This is a design sketch, not a
-    committed experiment.**
+    committed experiment.** Section 33's K=8 result (worse PDE-trained t=1
+    shock error than K=2, despite far stronger post-hoc capacity) is
+    additional evidence this question is still open. **Now secondary to
+    Phase A** (see item 22 below).
+
+22. **Phase A / Phase B framing — 2026-10-14 advisor direction
+    (`docs/meetings/2026-10-14.md`, `RESEARCH_LOG.md` Section 35).** The
+    advisor's central assessment is that the current `u_RF` itself is not
+    sufficiently accurate, and that a well-constructed RF approximation
+    should reproduce the smooth part of the solution well, with the
+    principal difficulty concentrated near the shock. All local-correction
+    work (items 3, 6, 8, 11, 13, 14, 20, 21 in this file) is therefore
+    **secondary** until a satisfactory smooth-region `u_RF` baseline is
+    established (Phase A: multi-seed testing, systematic Nx/Nt study,
+    learning-rate diagnostic, systematic multiscale study, joint-vs-
+    separable space-time RF comparison — see `TODO.md` current priority).
+    This does not invalidate the local-correction findings so far, it
+    reorders priority.
+
+23. **Joint space-time RF formulation — new idea from the 2026-10-14
+    meeting, UNTESTED.** Replace the current separable product features
+    ```
+    phi_ij(x,t) = cos(wx_i*x+bx_i) * cos(wt_j*t+bt_j)
+    u_RF(x,t) = sum_i sum_j c_ij phi_ij(x,t)
+    ```
+    with a single joint cosine over concatenated `(x,t)`:
+    ```
+    phi_k(x,t) = cos(wx_k*x + wt_k*t + b_k)
+    u_RF(x,t) = sum_k c_k phi_k(x,t)
+    ```
+    Proposed as an idea to test, not an established improvement. A fair
+    coefficient-budget comparison between the separable `Nx*Nt`
+    representation and a joint `N`-feature representation is not automatic
+    and is explicitly **TBD** — do not invent the comparison protocol yet.
+    See `TODO.md` item F.
+
+24. **Multi-seed / Nx-Nt joint convergence question — 2026-10-14 meeting.**
+    The RF basis-size sweep (Section 31) used only seed=42 with Nt fixed
+    at 10. Open question: is the observed degradation with increasing Nx a
+    property of the particular random realization, of the Nx/Nt balance,
+    or of the basis-size range tested? Multiple seeds and a joint Nx/Nt
+    study (possibly at a controlled ratio) are needed to distinguish these
+    — exact grid **TBD**, do not invent values. See `TODO.md` items B/C.
+
+25. **Smaller-learning-rate diagnostic — 2026-10-14 meeting.** Test whether
+    a smaller learning rate changes the RF basis-size sweep's finding
+    (Section 31), as a controlled optimization diagnostic kept isolated
+    from other architecture changes. See `TODO.md` item D.
+
+26. **Boundary-condition caveat for local Gaussian formulations —
+    clarified at the 2026-10-14 meeting.** For
+    `u_local(x,t) = t*sum_k d_k G_k(x)`, `u_local(x,0)=0` holds exactly,
+    but the Gaussian local correction does **not** analytically satisfy
+    the Burgers boundary condition at `x=±1`. For narrow Gaussians centered
+    near the shock this is numerically negligible (e.g. `G(±1)` underflows
+    to exactly `0.0` in float64 at the widths used so far, Section 23),
+    but it is not identically zero by construction. Relevant to any future
+    local-feature formulation, not an action item in itself.
 
 ## Ideas already tested — evidence against (do not re-attempt without new reasoning)
 
