@@ -1,3 +1,4 @@
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -472,6 +473,46 @@ def test_overwrite_protection():
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
+def test_checkpoint_optimizer_state_dict_structure():
+    """CPU-executable structural check, added after a CUDA-only regression
+    test bug (KeyError: 'param_groups') slipped past local testing: every
+    saved *_optimizer_state_dict in a checkpoint must be the COMPLETE
+    torch optimizer state_dict -- i.e. a dict with BOTH top-level keys
+    "state" and "param_groups" -- never just the nested per-parameter
+    "state" sub-dict on its own. torch.optim.Optimizer.load_state_dict()
+    requires both keys and raises KeyError('param_groups') if only "state"
+    is passed. This does not require CUDA and would have caught that bug
+    before it ever reached the GPU server."""
+    output_dir = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_opt_structure"
+    shutil.rmtree(output_dir, ignore_errors=True)
+    config.BUDGETS["_test_opt_structure"] = {"adam_iters": 3, "lbfgs_iters": 0}
+    try:
+        run(mode="adaptive", budget_name="_test_opt_structure", seed=0, output_dir=output_dir)
+        # final.pt is intentionally minimal (no optimizer state); the full,
+        # resumable checkpoint is latest.pt.
+        latest = torch.load(output_dir / "checkpoints" / "latest.pt", map_location="cpu", weights_only=False)
+
+        for key in ("net_optimizer_state_dict", "col_optimizer_state_dict", "u_optimizer_state_dict"):
+            sd = latest[key]
+            assert sd is not None, f"{key} unexpectedly None for mode=adaptive"
+            assert isinstance(sd, dict) and "state" in sd and "param_groups" in sd, (
+                f"{key} is missing required top-level keys (found: "
+                f"{sorted(sd.keys()) if isinstance(sd, dict) else type(sd)}) -- this must be the "
+                "COMPLETE optimizer state_dict, not just its 'state' sub-dict"
+            )
+            assert len(sd["state"]) > 0, f"{key}['state'] is empty"
+
+        # A freshly constructed optimizer must accept it without error --
+        # this is the exact call that previously raised KeyError('param_groups').
+        net = PINN().to(device="cpu", dtype=config.DTYPE)
+        reloaded = torch.optim.Adam(net.parameters(), lr=config.ADAM_LR, betas=config.ADAM_BETAS)
+        reloaded.load_state_dict(latest["net_optimizer_state_dict"])
+        print("test_checkpoint_optimizer_state_dict_structure: PASS")
+    finally:
+        config.BUDGETS.pop("_test_opt_structure", None)
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+
 def test_cuda_checkpoint_resume_consistency():
     """Regression test for the GPU-server bug: torch.load(resume_from,
     map_location=device) with device="cuda:0" relocated torch_rng_state
@@ -521,23 +562,44 @@ def test_cuda_checkpoint_resume_consistency():
         rng_cuda_resumed = torch.cuda.get_rng_state_all()
 
         # --- Confirm CUDA was actually used ---
+        # Check the run's OWN recorded device, not just that we can
+        # construct something on CUDA ourselves after the fact (a tensor we
+        # place on CUDA here would trivially be "on CUDA" regardless of
+        # what device training actually used -- that would not be a
+        # meaningful check).
+        run_config_full = json.loads((dir_full / "config.json").read_text())
+        assert run_config_full["device"] == str(device), (
+            f"run_config recorded device={run_config_full['device']!r}, expected {str(device)!r} "
+            "-- the uninterrupted run did not actually train on CUDA"
+        )
+
         latest_full = torch.load(dir_full / "checkpoints" / "latest.pt", map_location="cpu", weights_only=False)
         net_check = PINN().to(device=device, dtype=config.DTYPE)
         net_check.load_state_dict({k: v.to(device) for k, v in latest_full["model_state_dict"].items()})
-        assert all(p.is_cuda for p in net_check.parameters()), "model parameters were not on CUDA during training"
-        opt_state = latest_full["net_optimizer_state_dict"]["state"]
-        assert len(opt_state) > 0, "optimizer has no state to check"
-        # Adam's exp_avg/exp_avg_sq tensors as actually used during training
-        # live on the same device as the parameters (CUDA here); the saved
-        # checkpoint itself is CPU (by design, see save_checkpoint), so this
-        # checks the *device-casting round trip* works, not the raw saved
-        # bytes.
+        assert all(p.is_cuda for p in net_check.parameters()), "model parameters were not on CUDA after loading"
+
+        # IMPORTANT: load the COMPLETE optimizer state_dict
+        # ({"state": ..., "param_groups": ...}), not just its nested
+        # "state" sub-dict -- torch.optim.Optimizer.load_state_dict()
+        # requires both top-level keys and raises KeyError('param_groups')
+        # otherwise. This was the exact bug this test previously had.
+        full_optimizer_state_dict = latest_full["net_optimizer_state_dict"]
+        assert len(full_optimizer_state_dict["state"]) > 0, "optimizer has no per-parameter state to check"
         reloaded_net_optimizer = torch.optim.Adam(net_check.parameters(), lr=config.ADAM_LR, betas=config.ADAM_BETAS)
-        reloaded_net_optimizer.load_state_dict(opt_state)
-        for group in reloaded_net_optimizer.state.values():
-            for v in group.values():
+        reloaded_net_optimizer.load_state_dict(full_optimizer_state_dict)
+        for param_state in reloaded_net_optimizer.state.values():
+            for key, v in param_state.items():
+                if key == "step":
+                    # PyTorch deliberately keeps Adam's "step" counter on
+                    # CPU when capturable/fused are both off (the default
+                    # here) to avoid costly CUDA kernel launches -- this is
+                    # correct, documented behavior, NOT a sign that state
+                    # wasn't moved to CUDA. Checking it with the same
+                    # is_cuda assertion as exp_avg/exp_avg_sq would be a
+                    # false-positive test failure, not a real defect.
+                    continue
                 if torch.is_tensor(v):
-                    assert v.is_cuda, "optimizer state tensor was not moved to CUDA on load"
+                    assert v.is_cuda, f"optimizer state tensor '{key}' was not moved to CUDA on load"
 
         # --- Final model parameters: exact equality ---
         for key in ckpt_full["model_state_dict"]:
@@ -579,6 +641,7 @@ if __name__ == "__main__":
     test_checkpoint_save_load_roundtrip()
     test_adam_resume_consistency()
     test_lbfgs_resume_consistency()
+    test_checkpoint_optimizer_state_dict_structure()
     test_cuda_checkpoint_resume_consistency()
     test_seed_specific_output_directories()
     test_overwrite_protection()
