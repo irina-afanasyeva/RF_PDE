@@ -30,7 +30,7 @@ reference. There is NO self-adaptive weight for the boundary-condition
 term; BC loss is always plain unweighted MSE in the reference Burgers
 example.
 
-Three weight-construction modes are provided:
+Weight-construction modes provided:
   - make_adaptive_weights: SA-PINN, trainable, optimized by ascent.
   - make_baseline_weights: conventional PINN, fixed at 1.0 (effective
     mask 1**2=1, i.e. exactly unweighted MSE) -- the loss-FORMULA is
@@ -43,6 +43,18 @@ Three weight-construction modes are provided:
     ADAPTIVITY of the weights, or merely from the larger fixed effective
     loss scale (10,000x on the PDE term) that the lambda=100
     initialization already introduces before any ascent step happens.
+  - make_frozen_constant_weights: BALANCED fixed-weight control (added to
+    disentangle "frozen" from "imbalanced" as separate candidate causes of
+    make_fixed_weights' failure -- see docs/RESEARCH_LOG.md). Unlike
+    make_fixed_weights (col=100, u~U(0,1), i.e. PDE and IC terms given very
+    different effective scales -- lambda**2=10,000 for PDE vs. ~0.25 mean
+    for IC), this sets col_weights AND u_weights to the SAME constant
+    value, both frozen. Two concrete instances are used:
+    balanced_10 (value=10, effective mask 100 on both PDE and IC) and
+    balanced_100 (value=100, effective mask 10,000 on both). If these
+    configurations train successfully where make_fixed_weights failed, the
+    failure was caused by the PDE/IC *imbalance*, not by the weights being
+    frozen per se.
 """
 import torch
 
@@ -100,4 +112,18 @@ def make_fixed_weights(n_f, n_0, device, generator):
     u_weights = torch.rand((n_0, 1), generator=generator, dtype=config.DTYPE).to(device)
     # requires_grad left at its default False -- frozen throughout, by
     # construction (not merely "not optimized").
+    return col_weights, u_weights
+
+
+def make_frozen_constant_weights(n_f, n_0, device, value):
+    """Balanced fixed-weight control: BOTH col_weights and u_weights are
+    set to the SAME constant `value` (not config.COL_WEIGHT_INIT, not a
+    random draw), frozen for the whole run (requires_grad left at its
+    default False). Uses the same squared-mask loss convention as every
+    other mode -- effective mask on the squared residual is value**2 for
+    both the PDE and IC terms, equally. No RNG is consumed (no generator
+    needed), so this introduces no new RNG-footprint difference relative
+    to the other modes."""
+    col_weights = torch.full((n_f, 1), float(value), dtype=config.DTYPE, device=device)
+    u_weights = torch.full((n_0, 1), float(value), dtype=config.DTYPE, device=device)
     return col_weights, u_weights

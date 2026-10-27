@@ -138,7 +138,7 @@ def test_end_to_end_smoke():
     if smoke_root.exists():
         shutil.rmtree(smoke_root)
 
-    for mode in ("baseline", "adaptive", "fixed_weight"):
+    for mode in ("baseline", "adaptive", "fixed_weight", *config.BALANCED_MODE_VALUES):
         output_dir = smoke_root / mode
         metrics_rows, run_config = run(mode=mode, budget_name="smoke", seed=0, output_dir=output_dir)
         assert len(metrics_rows) > 0
@@ -236,6 +236,133 @@ def test_fixed_weight_attention_frozen_through_training():
     )
     shutil.rmtree(output_dir)
     print("test_fixed_weight_attention_frozen_through_training: PASS")
+
+
+def test_balanced_mode_mask_initialization():
+    """balanced_10/balanced_100: both col_weights and u_weights must be
+    initialized to the SAME constant (10 or 100 respectively) -- not
+    config.COL_WEIGHT_INIT, not a random draw -- and must be frozen
+    (requires_grad=False) from construction, not merely left unstepped."""
+    from sapinn import attention
+
+    device = torch.device("cpu")
+    for mode, value in config.BALANCED_MODE_VALUES.items():
+        col_weights, u_weights = attention.make_frozen_constant_weights(
+            config.N_F, config.N_0, device, value
+        )
+        assert col_weights.shape == (config.N_F, 1)
+        assert u_weights.shape == (config.N_0, 1)
+        assert torch.all(col_weights == value), f"{mode}: col_weights not all {value}"
+        assert torch.all(u_weights == value), f"{mode}: u_weights not all {value}"
+        assert col_weights.requires_grad is False, f"{mode}: col_weights must be frozen"
+        assert u_weights.requires_grad is False, f"{mode}: u_weights must be frozen"
+    print("test_balanced_mode_mask_initialization: PASS")
+
+
+def test_balanced_mode_frozen_through_training():
+    """Mirrors test_fixed_weight_attention_frozen_through_training for both
+    balanced_10 and balanced_100: run a tiny training and verify the saved
+    final col_weights/u_weights are BIT-IDENTICAL to the constant values
+    they were initialized to -- i.e. truly frozen through Adam and L-BFGS,
+    not just closely clustered."""
+    from sapinn import attention
+
+    seed = 13
+    for mode, value in config.BALANCED_MODE_VALUES.items():
+        output_dir = PROJECT_DIR / "outputs" / "sapinn_burgers" / f"_unit_test_tmp_{mode}_frozen"
+        shutil.rmtree(output_dir, ignore_errors=True)
+        try:
+            run(mode=mode, budget_name="smoke", seed=seed, output_dir=output_dir)
+            checkpoint = torch.load(output_dir / "checkpoints" / "final.pt", map_location="cpu", weights_only=False)
+            col_expected, u_expected = attention.make_frozen_constant_weights(
+                config.N_F, config.N_0, torch.device("cpu"), value
+            )
+            assert torch.equal(checkpoint["col_weights"], col_expected), (
+                f"{mode}: col_weights changed during training -- should have been frozen"
+            )
+            assert torch.equal(checkpoint["u_weights"], u_expected), (
+                f"{mode}: u_weights changed during training -- should have been frozen"
+            )
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+    print("test_balanced_mode_frozen_through_training: PASS")
+
+
+def test_balanced_mode_squared_loss_scaling():
+    """Directly verify the squared-mask loss convention for balanced_10/100:
+    weighted_pde_loss == value**2 * unweighted_pde_mse and
+    weighted_ic_loss == value**2 * unweighted_ic_mse exactly (same
+    mean((mask*residual)**2) = mean(mask**2 * residual**2) identity used by
+    every other mode -- see sapinn/train.py's compute_losses)."""
+    from sapinn import attention
+    from sapinn.train import compute_losses
+
+    device = torch.device("cpu")
+    config.set_all_seeds(0)
+    tensors = sampling.build_training_tensors(0, device)
+    net = PINN().to(device=device, dtype=config.DTYPE)
+
+    for mode, value in config.BALANCED_MODE_VALUES.items():
+        col_weights, u_weights = attention.make_frozen_constant_weights(
+            config.N_F, config.N_0, device, value
+        )
+        losses = compute_losses(net, tensors, col_weights, u_weights)
+        expected_pde = (value ** 2) * losses["unweighted_pde_mse"].item()
+        expected_ic = (value ** 2) * losses["unweighted_ic_mse"].item()
+        assert abs(losses["weighted_pde_loss"].item() - expected_pde) < 1e-6 * max(1.0, abs(expected_pde)), (
+            f"{mode}: weighted_pde_loss={losses['weighted_pde_loss'].item()} != "
+            f"value**2 * unweighted_pde_mse={expected_pde}"
+        )
+        assert abs(losses["weighted_ic_loss"].item() - expected_ic) < 1e-6 * max(1.0, abs(expected_ic)), (
+            f"{mode}: weighted_ic_loss={losses['weighted_ic_loss'].item()} != "
+            f"value**2 * unweighted_ic_mse={expected_ic}"
+        )
+    print("test_balanced_mode_squared_loss_scaling: PASS")
+
+
+def test_balanced_mode_checkpoint_resume():
+    """Checkpoint/resume compatibility for a balanced mode, mirroring
+    test_adam_resume_consistency: 10 Adam epochs uninterrupted vs. 5+resume+5
+    (same budget name, temporarily shortened for the first half) must give
+    BIT-IDENTICAL final network/attention state."""
+    mode = "balanced_10"
+    dir_full = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_balanced_resume_full"
+    dir_half = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_balanced_resume_half"
+    dir_resumed = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_balanced_resume_resumed"
+    for d in (dir_full, dir_half, dir_resumed):
+        shutil.rmtree(d, ignore_errors=True)
+
+    config.BUDGETS["_test_balanced_resume"] = {"adam_iters": 10, "lbfgs_iters": 0}
+    try:
+        rows_full, _ = run(mode=mode, budget_name="_test_balanced_resume", seed=0, output_dir=dir_full)
+        ckpt_full = torch.load(dir_full / "checkpoints" / "final.pt", map_location="cpu", weights_only=False)
+
+        config.BUDGETS["_test_balanced_resume"] = {"adam_iters": 5, "lbfgs_iters": 0}
+        run(mode=mode, budget_name="_test_balanced_resume", seed=0, output_dir=dir_half)
+        halfway_ckpt = dir_half / "checkpoints" / "latest.pt"
+
+        config.BUDGETS["_test_balanced_resume"] = {"adam_iters": 10, "lbfgs_iters": 0}
+        rows_resumed, _ = run(
+            mode=mode, budget_name="_test_balanced_resume", seed=0, output_dir=dir_resumed,
+            resume_from=halfway_ckpt,
+        )
+        ckpt_resumed = torch.load(dir_resumed / "checkpoints" / "final.pt", map_location="cpu", weights_only=False)
+
+        for key in ckpt_full["model_state_dict"]:
+            assert torch.equal(ckpt_full["model_state_dict"][key], ckpt_resumed["model_state_dict"][key]), (
+                f"{mode}: resumed run's {key} differs from the uninterrupted run"
+            )
+        assert torch.equal(ckpt_full["col_weights"], ckpt_resumed["col_weights"])
+        assert torch.equal(ckpt_full["u_weights"], ckpt_resumed["u_weights"])
+        assert rows_full[-1]["total_objective"] == rows_resumed[-1]["total_objective"], (
+            f"{mode}: final loss differs between uninterrupted and resumed runs"
+        )
+        print(f"test_balanced_mode_checkpoint_resume: PASS (bit-identical final state, "
+              f"total_objective={rows_full[-1]['total_objective']:.6e})")
+    finally:
+        config.BUDGETS.pop("_test_balanced_resume", None)
+        for d in (dir_full, dir_half, dir_resumed):
+            shutil.rmtree(d, ignore_errors=True)
 
 
 def test_checkpoint_save_load_roundtrip():
@@ -638,6 +765,10 @@ if __name__ == "__main__":
     test_baseline_and_adaptive_share_initial_state()
     test_fixed_weight_and_adaptive_share_initial_attention_weights()
     test_fixed_weight_attention_frozen_through_training()
+    test_balanced_mode_mask_initialization()
+    test_balanced_mode_frozen_through_training()
+    test_balanced_mode_squared_loss_scaling()
+    test_balanced_mode_checkpoint_resume()
     test_checkpoint_save_load_roundtrip()
     test_adam_resume_consistency()
     test_lbfgs_resume_consistency()

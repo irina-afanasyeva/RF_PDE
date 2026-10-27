@@ -1,22 +1,31 @@
-"""Shared trainer for three modes: the conventional-PINN "baseline", the
-reference-faithful "adaptive" SA-PINN, and the "fixed_weight" loss-scale-
-matched control. A single parameterized entry point (`run(mode=...)`) is
-used for all three on purpose, so they are structurally guaranteed to
-share architecture, training points, and seed -- the only difference
-between them is the attention-weight path (see attention.py):
-  - baseline:      weights fixed at 1.0 (effective mask 1**2=1, i.e.
-                    exactly unweighted MSE).
-  - adaptive:       weights trainable, initialized as in the reference
-                    (col_weights=100, u_weights~U(0,1)), updated by
-                    gradient ASCENT during the Adam phase, frozen during
-                    L-BFGS.
-  - fixed_weight:   weights initialized IDENTICALLY to adaptive (same
-                    values, same RNG draw), but requires_grad=False for
-                    the entire run -- isolates whether any
-                    adaptive-vs-baseline difference comes from the
-                    per-point ADAPTIVITY of the weights, or merely from
-                    the larger fixed effective loss scale that the
-                    lambda=100 initialization introduces on its own.
+"""Shared trainer for five modes: the conventional-PINN "baseline", the
+reference-faithful "adaptive" SA-PINN, the "fixed_weight" loss-scale-
+matched control, and the "balanced_10"/"balanced_100" frozen-and-balanced
+controls. A single parameterized entry point (`run(mode=...)`) is used for
+all of them on purpose, so they are structurally guaranteed to share
+architecture, training points, and seed -- the only difference between
+them is the attention-weight path (see attention.py):
+  - baseline:        weights fixed at 1.0 (effective mask 1**2=1, i.e.
+                      exactly unweighted MSE).
+  - adaptive:         weights trainable, initialized as in the reference
+                      (col_weights=100, u_weights~U(0,1)), updated by
+                      gradient ASCENT during the Adam phase, frozen during
+                      L-BFGS.
+  - fixed_weight:     weights initialized IDENTICALLY to adaptive (same
+                      values, same RNG draw), but requires_grad=False for
+                      the entire run -- isolates whether any
+                      adaptive-vs-baseline difference comes from the
+                      per-point ADAPTIVITY of the weights, or merely from
+                      the larger fixed effective loss scale that the
+                      lambda=100 initialization introduces on its own.
+  - balanced_10/100:  BOTH col_weights and u_weights fixed at the SAME
+                      constant (10 or 100 respectively, see
+                      config.BALANCED_MODE_VALUES), frozen for the entire
+                      run -- isolates whether fixed_weight's failure was
+                      caused by the weights being frozen per se, or by the
+                      severe PDE/IC scale IMBALANCE in that specific
+                      configuration (effective 10,000x on PDE vs. ~0.25x
+                      mean on IC).
 
 Safeguards enforced here (see task spec):
   - "weighted_pde_loss" and "unweighted_pde_mse" are always separate,
@@ -188,7 +197,7 @@ def run(
     resume_from=None, overwrite=False,
     checkpoint_every_adam=None, eval_every_adam=None, lbfgs_chunk_size=None,
 ):
-    assert mode in ("baseline", "adaptive", "fixed_weight"), mode
+    assert mode in ("baseline", "adaptive", "fixed_weight", *config.BALANCED_MODE_VALUES), mode
     assert budget_name in config.BUDGETS, budget_name
     device = device or config.get_device()
     checkpoint_every_adam = checkpoint_every_adam or config.CHECKPOINT_EVERY_ADAM
@@ -258,6 +267,10 @@ def run(
     elif mode == "fixed_weight":
         col_weights, u_weights = attention.make_fixed_weights(
             config.N_F, config.N_0, device, cpu_generator
+        )
+    elif mode in config.BALANCED_MODE_VALUES:
+        col_weights, u_weights = attention.make_frozen_constant_weights(
+            config.N_F, config.N_0, device, config.BALANCED_MODE_VALUES[mode]
         )
     else:
         col_weights, u_weights = attention.make_baseline_weights(config.N_F, config.N_0, device)

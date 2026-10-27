@@ -69,6 +69,19 @@ N_B_TOTAL = 2 * N_B_PER_SIDE
 COL_WEIGHT_INIT = 100.0
 U_WEIGHT_INIT_DIST = "uniform_0_1"
 
+# [CHOICE] "Balanced" fixed-weight diagnostic modes, added to separate
+# "frozen" from "imbalanced" as candidate explanations for the original
+# fixed_weight mode's failure (col=100 i.e. effective 10,000x on PDE,
+# u~U(0,1) i.e. effective ~0.25x mean on IC -- a 40,000x imbalance). Both
+# PDE and IC masks are set to the SAME constant, frozen throughout. Mode
+# names double as their own output-directory names (see scripts/
+# train_sapinn.py), so these are also the authoritative set of valid
+# "balanced_*" mode names.
+BALANCED_MODE_VALUES = {
+    "balanced_10": 10.0,
+    "balanced_100": 100.0,
+}
+
 # --- Optimizers ---
 ADAM_LR = 5e-3       # [CODE] lr=0.005 for all three Adam optimizers (network, col_weights, u_weights)
 ADAM_BETAS = (0.90, 0.999)  # [CODE] beta_1=.90 explicit; beta_2 not overridden -> Keras/TF default 0.999

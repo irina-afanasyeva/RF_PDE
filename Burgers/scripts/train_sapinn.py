@@ -36,7 +36,11 @@ OUTPUT_ROOT = PROJECT_DIR / "outputs" / "sapinn_burgers"
 
 def parse_args():
     parser = argparse.ArgumentParser(description="SA-PINN / conventional-PINN Burgers benchmark")
-    parser.add_argument("--mode", choices=["baseline", "adaptive", "fixed_weight"], required=True)
+    parser.add_argument(
+        "--mode",
+        choices=["baseline", "adaptive", "fixed_weight", *config.BALANCED_MODE_VALUES],
+        required=True,
+    )
     parser.add_argument("--budget", choices=list(config.BUDGETS.keys()), default="smoke")
     parser.add_argument("--seed", type=int, default=config.DEFAULT_SEED)
     parser.add_argument("--resume", type=str, default=None,
