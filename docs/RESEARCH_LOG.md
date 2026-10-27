@@ -1586,3 +1586,245 @@ order — a structured summary of open directions):**
   reconsider local basis design and PDE training of `u_local`, including
   the still-open `d1`/`d2` amplitude-asymmetry question (Section 29) and
   the deprioritized trainable-geometry item.
+
+---
+
+## 36. Random-seed sensitivity (Phase A item B)
+
+**Hypothesis.** Section 31's RF basis-size sweep used only seed=42. Is the
+canonical Nx=500, Nt=10 result a property of the RF method, or a
+particularly good (or bad) random realization?
+
+**Experiment.** Canonical RF-only training (Nx=500, Nt=10, sigma_x=0.04,
+sigma_t=1/3, M_TRAIN=3600, M_BD=500, M_INT=500, 1000 epochs, LR=5e-4,
+weight_decay=1, IC_BC_WEIGHT=1000, float64) at five new seeds
+(20, 21, 22, 23, 24), each trained independently from `set_seed(seed)`
+onward — BurgersRF construction and `physics.train()`/loss_fn reused
+unmodified. The canonical seed=42 result was **reused, not retrained**,
+reconstructed directly from the existing complete `model_state_dict`
+checkpoint and gated against the canonical reference at `rtol=1e-4`
+before inclusion. Script: `Burgers/scripts/sweep_rf_random_seeds.py`
+(`ac6f577`). Output: `Burgers/outputs/rf_random_seed_sweep/summary.csv`
+(verified locally — all six rows present).
+
+**Result (canonical multi-time metrics):**
+```
+seed 20: global=0.28212115, smooth=0.25733275, shock=0.82372690
+seed 21: global=0.35065153, smooth=0.31609976, shock=1.13111724
+seed 22: global=0.31030160, smooth=0.27981009, shock=0.97772456
+seed 23: global=0.30263023, smooth=0.28010646, shock=0.82286865
+seed 24: global=0.26166848, smooth=0.23196671, shock=0.85814503
+seed 42: global=0.27149430, smooth=0.24438271, shock=0.83904880  (canonical reference, reused)
+```
+Across all six seeds: global mean=0.296478, sample stdev=0.032267,
+min=0.261668 (seed 24), max=0.350652 (seed 21); smooth mean=0.268283,
+stdev=0.030230; shock mean=0.908772, stdev=0.123473, min=0.822869
+(seed 23), max=1.131117 (seed 21). Seed 42 ranks 2nd-best of six by
+global error and 3rd-best of six by shock error.
+
+**Interpretation.** Seed 42 is **not unusually poor** — it sits on the
+better side of the six-seed distribution, not the worse. However, there is
+observed seed-to-seed variability across the six tested seeds (global
+relative L2 spans ~0.26–0.35, roughly a 34% relative range). This observed
+range should not be generalized into a universal uncertainty bound — it
+describes variability among these six seeds under this specific
+configuration, not a property proven to hold elsewhere — but it does
+motivate caution (and ideally reporting this kind of range, or testing
+additional seeds) when comparing single-seed conclusions elsewhere in this
+log (including Sections 31–34). Collocation points, RF weights/phases, and
+coefficient initialization are seed-determined and therefore differ across
+seeds by design; this is not a confound, it is the variable under study.
+
+---
+
+## 37. Fixed Nx/Nt=50 ratio sweep (Phase A item C)
+
+**Hypothesis.** Section 31 varied `Nx` alone with `Nt` fixed at 10. Does
+scaling `Nt` together with `Nx`, preserving the canonical ratio
+`Nx/Nt=50`, avoid the degradation seen when `Nx` alone was increased?
+
+**Experiment.** RF-only training at seed=42, 1000 epochs, with all other
+settings canonical, across eleven `(Nx, Nt)` pairs preserving `Nx/Nt=50`:
+`(50,1), (100,2), (250,5), (500,10), (750,15), (1000,20), (1250,25),
+(1500,30), (2000,40), (2500,50), (3000,60)`. The `(500,10)` case is the
+canonical configuration and was gated against the known canonical
+reference (`rtol=1e-4`) before trusting the rest of the sweep. For every
+config, `set_seed(42)` is called fresh immediately before
+`sample_training_points`/model construction, so collocation points are
+bit-identical across all configs; `BurgersRF.__init__` draws an
+`(Nx,Nt)`-dependent number of random values, so per-epoch BC/IC sampling
+necessarily differs across configs from the first training epoch onward
+(same documented behavior as Section 31, no new sampling methodology).
+Script: `Burgers/scripts/sweep_rf_nx_nt_fixed_ratio.py` (`bf4f24b`,
+`36019b4`). Output:
+`Burgers/outputs/rf_nx_nt_fixed_ratio_sweep/summary.csv` (verified
+locally). **`(3500,70)` and `(4000,80)` were not run** — the sweep's
+configuration list includes them, but training stopped after `(3000,60)`;
+no results exist for the two largest configurations and none are claimed
+here.
+
+**Result (canonical multi-time global / smooth / shock relative L2,
+coefficient count in parentheses):**
+```
+( 50, 1,     50): 0.90501 / 0.90225 / 1.03501
+(100, 2,    200): 0.50583 / 0.49452 / 0.87537
+(250, 5,   1250): 0.40976 / 0.39439 / 0.84989
+(500,10,   5000): 0.27149 / 0.24438 / 0.83905   <- canonical
+(750,15,  11250): 0.27107 / 0.24416 / 0.83463
+(1000,20, 20000): 0.32090 / 0.28550 / 1.07842
+(1250,25, 31250): 0.29630 / 0.26300 / 0.99121
+(1500,30, 45000): 0.28769 / 0.25719 / 0.92850
+(2000,40, 80000): 0.32777 / 0.29053 / 1.12120
+(2500,50,125000): 0.27658 / 0.24515 / 0.91793
+(3000,60,180000): 0.37456 / 0.34421 / 1.10767
+```
+PDE loss (sampled, not shown above) does not track solution error
+monotonically either — e.g. `(1000,20)` has a *lower* PDE loss
+(0.22346) than canonical `(0.23590)` while its global/smooth/shock errors
+are all worse.
+
+**Interpretation.** Error vs. coefficient count is **non-monotonic** —
+there is no systematic improvement from increasing capacity beyond the
+canonical scale, consistent with Section 31's single-axis finding. The
+one partial exception is `(750,15)`, which is essentially tied with (very
+slightly better than) canonical on global/smooth/shock simultaneously —
+worth noting as a possible local optimum near the canonical scale, not
+evidence that larger capacity helps generally. Degradation reappears
+immediately at `(1000,20)`, partially recovers by `(1500,30)`/`(2500,50)`,
+and is worst at the largest completed configuration `(3000,60)`. Do
+**not** conclude this rules out larger RF bases working well under a
+different seed, training budget, or learning rate — see Sections 36 and
+38.
+
+---
+
+## 38. Learning-rate sensitivity (Phase A item D)
+
+**Hypothesis.** Is the canonical Adam `LR=5e-4` too aggressive, and does a
+smaller learning rate produce a more accurate RF-only solution under the
+same 1000-epoch budget?
+
+**Experiment.** Canonical RF-only configuration (Nx=500, Nt=10, seed=42,
+all settings otherwise unchanged), comparing `LR in {2e-4, 1e-4, 5e-5}`
+(freshly trained, continuously from epoch 0 to 1000 via three
+`train()` segments — 0→250, 250→500, 500→1000 — with RNG-free fixed-grid
+intermediate diagnostics, the same proven-safe segmentation pattern as
+Section 32) against the canonical `LR=5e-4` reference (reused/reconstructed
+from the existing checkpoint, **not retrained**, gated at `rtol=1e-4`;
+only its real epoch=1000 result exists — no 250/500-epoch values are
+claimed for it). For every new LR, `set_seed(42)` → `sample_training_points`
+→ `BurgersRF(...)` is identical and LR-independent, so collocation points,
+RF weights/phases, and coefficient initialization are bit-identical across
+all three new LR runs, and the per-epoch BC/IC draws are therefore also
+bit-identical across them (LR affects only `optimizer.step()`, never a
+sampling call). Script: `Burgers/scripts/sweep_rf_learning_rate.py`
+(`479b761`). Output:
+`Burgers/outputs/rf_learning_rate_sweep/summary.csv` (verified locally).
+
+**Result (global relative L2, by epoch):**
+```
+LR=5e-4 (canonical): epoch 1000 = 0.27149  (reused, no 250/500 values exist)
+LR=2e-4:  epoch 250 = 0.45493,  epoch 500 = 0.37387,  epoch 1000 = 0.30987
+LR=1e-4:  epoch 250 = 0.52479,  epoch 500 = 0.44756,  epoch 1000 = 0.36598
+LR=5e-5:  epoch 250 = 0.57251,  epoch 500 = 0.52036,  epoch 1000 = 0.44056
+```
+(Smooth/shock/IC/PDE-loss/BC-loss follow the same ordering; full values in
+`summary.csv`.)
+
+**Interpretation.** At the fixed 1000-epoch budget, **all three smaller
+learning rates are worse than canonical**, but all three continued
+improving substantially through epoch 1000 and had not demonstrated a
+plateau. (The 250→500 and 500→1000 checkpoint intervals are of unequal
+length — 250 vs. 500 epochs — so their absolute error reductions are not
+directly comparable, and no claim is made here about the per-epoch rate of
+improvement speeding up or slowing down.) **Do not conclude that smaller
+learning rates are intrinsically inferior** — this
+experiment only establishes that they are worse *under this specific
+1000-epoch budget*, and motivates a longer-training follow-up (capped
+intentionally at 1000 epochs here, per the experimental design) before any
+claim about a smaller LR's achievable accuracy can be made.
+
+---
+
+## 39. Nx=500, Nt=10 longer-training diagnostic (restoring the original training duration)
+
+**Hypothesis.** The original pre-refactor notebook/script trained for
+5000 epochs; the current canonical configuration trains for 1000. Direct
+inspection (git history) found this to be the **only** real numerical
+difference between the original baseline and the current canonical
+RF-only setup (besides the retired `N_TRIALS=10→1` change) — does
+restoring the original training duration substantially improve the
+canonical Nx=500, Nt=10 result?
+
+**Experiment.** Continuation from the existing canonical seed=42,
+1000-epoch checkpoint to 2000 and 5000 epochs, via repeated `train()`
+calls on the same model/optimizer (same proven segmented-continuation
+pattern as Section 32), with collocation points regenerated
+bit-identically via `set_seed(42) → sample_training_points`. Script:
+`Burgers/scripts/test_rf_nx500_long_training.py` (`bf4f24b`). Output:
+`Burgers/outputs/rf_nx500_long_training/summary.csv` (verified locally).
+
+**IMPORTANT caveat (stated explicitly, not to be dropped in any later
+summary):** this project's checkpoint format has never stored optimizer
+state — only `model_state_dict` and metadata. This continuation therefore
+uses a **freshly initialized Adam optimizer** at epoch 1000 (zero moment
+buffers), not a resumption of the original optimizer's internal state.
+**This is not an exact uninterrupted 5000-epoch run** — it is "trained
+weights at epoch 1000, continued with a fresh optimizer," which is a
+different (and weaker) claim than a true continuous 5000-epoch trajectory.
+
+**Result:**
+```
+epoch 1000: global=0.27149430, smooth=0.24438271, shock=0.83904880, PDE=0.23590008
+epoch 2000: global=0.27013501, smooth=0.24283171, shock=0.83915919, PDE=0.23034099
+epoch 5000: global=0.27041999, smooth=0.24296839, shock=0.84220162, PDE=0.22450591
+```
+
+**Interpretation.** Global and smooth relative L2 improve only slightly
+from epoch 1000 to 2000 (global: 0.2715→0.2701, ≈0.5%) and then do **not**
+improve further by epoch 5000 (global ticks back up to 0.2704). **Shock
+error does not improve at all** — it is flat-to-slightly-worse across all
+three checkpoints (0.83905→0.83916→0.84220), even as the sampled PDE loss
+continues to decrease monotonically (0.23590→0.23034→0.22451). This is the
+same PDE-residual-vs-solution-error dissociation already seen in Section
+31 (and in Sections 27–29/33 for the local-correction work): **lower PDE
+loss does not imply lower solution error**, here most clearly in the shock
+region. Given the fresh-optimizer caveat above, this result should be read
+as "restoring the original epoch count, under a necessarily
+re-initialized optimizer, gives at most a very small improvement and does
+not rescue the shock-region error" — not as a clean reproduction of what
+the original 5000-epoch run would have produced with its own
+(unrecorded) optimizer trajectory.
+
+---
+
+## 40. October 21, 2026 meeting checkpoint
+
+**Status at the meeting.** Sections 36–39 above were presented: seed 42 is
+not an unusually poor realization among seeds 20–24 (Section 36); the
+fixed-ratio Nx/Nt=50 sweep through `(3000,60)` shows non-monotonic error
+with no systematic gain from capacity beyond the canonical scale (Section
+37); smaller learning rates are worse at a fixed 1000-epoch budget but are
+still improving, not converged (Section 38); and restoring the original
+5000-epoch training duration (under a necessarily re-initialized
+optimizer) gives only a small global/smooth improvement and no shock-region
+improvement (Section 39).
+
+**Advisor direction.** The professor requested studying a self-adaptive
+PINN method from a paper that includes a viscous Burgers benchmark
+(Section 4.1 of that paper), where per-collocation-point weights are
+assigned and adjusted during training. Exact quote: "For the self-adaptive
+PINN, the idea is assigning weights to each collocation points and
+adjusting them during the training. Please look at the paper and try to
+reproduce their results. They did have viscous Burgers' equation (see
+Section 4.1)." **Paper reference/citation: not yet supplied — placeholder,
+to be filled in once available.**
+
+**Proposed workflow (not yet started):** (1) read and understand the
+paper; (2) reproduce its self-adaptive PINN viscous Burgers experiment;
+(3) investigate transferring adaptive collocation-point weighting to the
+RF model; (4) investigate loss-function modifications for RF-only and
+RF+`u_local`, motivated directly by the PDE-residual-vs-solution-error
+mismatch already documented in Sections 27–29, 33, and 39 above. See
+`docs/meetings/2026-10-21.md` for the full meeting record and `TODO.md`
+for the reordered actionable plan.

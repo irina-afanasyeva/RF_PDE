@@ -3,39 +3,48 @@
 Actionable research plan. See `RESEARCH_LOG.md` for the numerical results and
 reasoning behind each item; this file tracks priority and status only.
 
-## Current priority — Phase A: improve/understand u_RF
+## Current priority — self-adaptive PINN investigation (2026-10-21 advisor direction)
 
-**Following the 2026-10-14 advisor meeting** (`docs/meetings/2026-10-14.md`;
-`RESEARCH_LOG.md` Section 35), the research priority has shifted: the
-immediate problem is the quality of the baseline RF approximation `u_RF`
-itself, not further local-correction complexity. Return to local shock
-enrichment (the former Phase, items now moved to "Later / deprioritized"
-below) only once a satisfactory smooth-region `u_RF` is established.
+**Following the 2026-10-21 advisor meeting** (`docs/meetings/2026-10-21.md`;
+`RESEARCH_LOG.md` Section 40), after seed/Nx-Nt/LR/long-training diagnostics
+(Sections 36–39) were reviewed, the professor asked that we study a
+self-adaptive PINN method that assigns and adjusts per-collocation-point
+weights during training, and try to reproduce its viscous Burgers
+benchmark. This is now the top priority, ahead of the remaining Phase-A
+items below.
+
+**P1. Read and understand the self-adaptive PINN paper**, focusing on its
+Section 4.1 viscous Burgers experiment. **Paper reference: not yet
+supplied — placeholder, do not invent a citation or algorithm details.**
+
+**P2. Reproduce the paper's self-adaptive PINN viscous Burgers result**,
+once the paper and its exact setup are available.
+
+**P3. Investigate transferring adaptive collocation-point weighting to the
+RF model** — exact mechanism TBD, depends on P1/P2.
+
+**P4. Investigate loss-function modifications for RF-only and RF+`u_local`**
+that could improve solution accuracy, directly motivated by the repeatedly
+observed mismatch between PDE-residual reduction and actual solution-error
+reduction (`RESEARCH_LOG.md` Sections 27–29, 33, and 39 — e.g. Section 39's
+long-training diagnostic: PDE loss decreases monotonically from epoch 1000
+to 5000 while shock error does not improve at all).
+
+## Phase A — remaining items (improve/understand u_RF)
+
+Items B, C, D below are now **completed** (see "Completed" list) and have
+been removed from this section. The following remain open:
 
 **A. Compare the current RF implementation/setup against the advisor's
 better RF solution**, once shared, to identify what differs.
 
-**B. Multi-seed RF study.** The basis-size sweep (completed, see below) used
-only seed=42. Run multiple seeds (advisor mentioned e.g. 20, 21, ... as
-examples) to separate "poor particular random realization" from a
-systematic capacity/training issue.
-
-**C. Systematic Nx/Nt convergence study**, investigating Nx and Nt
-jointly rather than Nx alone (the completed sweep fixed Nt=10), possibly
-with a controlled Nx/Nt ratio, over a substantially broader RF-size range.
-**The exact Nx/Nt grid is explicitly TBD** — not decided at the meeting; do
-not invent specific values.
-
-**D. Smaller-learning-rate diagnostic**, as a controlled test of `u_RF`
-quality — kept isolated from other architecture changes in the same run,
-not combined with them.
-
 **E. Systematic multiscale RF study.** Extends the two completed
-diagnostics (below): select sigma1/sigma2 in a principled way — ultimately
-informed by PDE structure rather than chosen arbitrarily — and
-investigate the N1/N2 allocation between populations and the effect of
-increasing total N. **Do not treat the completed std=75 result as having
-found the correct or optimal scales** — exact future values/grid TBD.
+diagnostics (see "Completed" below): select sigma1/sigma2 in a principled
+way — ultimately informed by PDE structure rather than chosen arbitrarily
+— and investigate the N1/N2 allocation between populations and the effect
+of increasing total N. **Do not treat the completed std=75 result as
+having found the correct or optimal scales** — exact future values/grid
+TBD.
 
 **F. Joint space-time RF formulation, as an idea to test (not an
 established improvement):**
@@ -95,8 +104,11 @@ not `model.py` itself — was found and fixed separately; see
 
 ## After a promising model
 
-Multi-seed validation (not before — single-seed results throughout
-`RESEARCH_LOG.md` have not yet been checked for seed sensitivity).
+Broader multi-seed validation. Section 36 checked seed sensitivity for the
+*canonical baseline configuration only* (seeds 20-24 vs. 42); the
+local-correction experiments elsewhere in `RESEARCH_LOG.md` (Gaussian
+corrections, K-Gaussian studies, etc.) remain single-seed and have not yet
+been checked.
 
 ## Completed (do not repeat without a new reason)
 
@@ -200,6 +212,25 @@ Multi-seed validation (not before — single-seed results throughout
   (Section 34.2) — first controlled positive multiscale result: same
   total Nx=500, better frequency allocation improved global, smooth,
   shock, and PDE metrics simultaneously. Not claimed optimal.
+- Multi-seed RF study, seeds 20-24 vs. canonical 42 (Section 36, item B) —
+  seed 42 is not unusually poor (2nd-best of six by global error); genuine
+  seed-to-seed variability is substantial (~34% relative range in global
+  error across the six seeds).
+- Fixed Nx/Nt=50 ratio sweep, (50,1) through (3000,60) (Section 37, item
+  C) — non-monotonic error vs. coefficient count; no systematic
+  improvement from increasing capacity beyond the canonical scale;
+  (750,15) is essentially tied with canonical, the only near-exception;
+  (3500,70) and (4000,80) were not run.
+- Smaller-learning-rate diagnostic, LR in {2e-4,1e-4,5e-5} vs. canonical
+  5e-4 (Section 38, item D) — all three smaller LRs are worse at the fixed
+  1000-epoch budget but are still improving substantially, not converged;
+  not shown to be intrinsically inferior.
+- Nx=500,Nt=10 longer-training diagnostic, 1000->2000->5000 epochs
+  (Section 39) — restoring the original 5000-epoch training duration
+  (under a necessarily re-initialized Adam optimizer, since no optimizer
+  state was ever saved) gives only a small global/smooth improvement and
+  no shock-region improvement; PDE loss keeps decreasing while shock error
+  does not.
 
 ## Workflow
 

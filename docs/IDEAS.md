@@ -253,18 +253,34 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
     and is explicitly **TBD** — do not invent the comparison protocol yet.
     See `TODO.md` item F.
 
-24. **Multi-seed / Nx-Nt joint convergence question — 2026-10-14 meeting.**
-    The RF basis-size sweep (Section 31) used only seed=42 with Nt fixed
-    at 10. Open question: is the observed degradation with increasing Nx a
-    property of the particular random realization, of the Nx/Nt balance,
-    or of the basis-size range tested? Multiple seeds and a joint Nx/Nt
-    study (possibly at a controlled ratio) are needed to distinguish these
-    — exact grid **TBD**, do not invent values. See `TODO.md` items B/C.
+24. **Multi-seed / Nx-Nt joint convergence question — 2026-10-14 meeting,
+    now TESTED (see `RESEARCH_LOG.md` Sections 36–37).** The RF basis-size
+    sweep (Section 31) used only seed=42 with Nt fixed at 10. **Tested
+    finding:** seed 42 is not a particularly poor realization (ranks
+    2nd-best of six by global error among seeds 20–24 and 42, Section 36),
+    though genuine seed-to-seed variability is substantial (~34% relative
+    range in global error). The fixed-ratio Nx/Nt=50 sweep through
+    `(3000,60)` (Section 37) confirms the degradation is **not** simply a
+    property of varying Nx alone — jointly scaling Nx and Nt still gives
+    non-monotonic error with no systematic improvement beyond the
+    canonical scale, with `(750,15)` as a near-exception. **Remaining
+    untested hypothesis:** whether a different seed, training budget, or
+    learning rate changes this picture at larger `(Nx,Nt)` — not yet
+    separated from the capacity question itself. `(3500,70)`/`(4000,80)`
+    were never run. See `TODO.md`'s "Completed" list.
 
-25. **Smaller-learning-rate diagnostic — 2026-10-14 meeting.** Test whether
-    a smaller learning rate changes the RF basis-size sweep's finding
-    (Section 31), as a controlled optimization diagnostic kept isolated
-    from other architecture changes. See `TODO.md` item D.
+25. **Smaller-learning-rate diagnostic — 2026-10-14 meeting, now TESTED
+    (see `RESEARCH_LOG.md` Section 38).** Test whether a smaller learning
+    rate changes the RF basis-size sweep's finding (Section 31), as a
+    controlled optimization diagnostic kept isolated from other
+    architecture changes. **Tested finding:** at a fixed 1000-epoch
+    budget, LR in {2e-4, 1e-4, 5e-5} are all worse than canonical LR=5e-4,
+    but none have plateaued — all three are still improving substantially
+    from epoch 500 to 1000. **Remaining untested hypothesis, not yet
+    run:** whether a smaller LR would match or beat canonical given a
+    longer training budget (explicitly out of scope for Section 38, which
+    was capped at 1000 epochs by design). See `TODO.md`'s "Completed"
+    list.
 
 26. **Boundary-condition caveat for local Gaussian formulations —
     clarified at the 2026-10-14 meeting.** For
@@ -275,6 +291,22 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
     to exactly `0.0` in float64 at the widths used so far, Section 23),
     but it is not identically zero by construction. Relevant to any future
     local-feature formulation, not an action item in itself.
+
+27. **Self-adaptive collocation-point weighting — 2026-10-21 advisor
+    direction (`docs/meetings/2026-10-21.md`, `RESEARCH_LOG.md` Section
+    40), UNTESTED.** The professor pointed to a self-adaptive PINN method
+    (paper reference not yet supplied — placeholder) that assigns a weight
+    to each collocation point and adjusts those weights during training,
+    with a reported viscous Burgers benchmark (the paper's Section 4.1).
+    Candidate idea for this project: investigate whether an analogous
+    adaptive per-collocation-point weighting (or another loss-function
+    modification motivated by the same principle) could help the RF model
+    — directly motivated by the repeatedly observed mismatch between PDE
+    residual reduction and actual solution-error reduction (`RESEARCH_LOG.md`
+    Sections 27–29, 33, 39). **This is entirely untested and depends on
+    first reading the paper and reproducing its own Burgers result (see
+    `TODO.md` items P1/P2) before any adaptation to the RF model is
+    attempted.** Do not invent the paper's algorithm or hyperparameters.
 
 ## Ideas already tested — evidence against (do not re-attempt without new reasoning)
 
