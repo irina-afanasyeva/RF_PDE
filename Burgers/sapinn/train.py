@@ -209,7 +209,25 @@ def run(
 
     resume_state = None
     if resume_from is not None:
-        resume_state = torch.load(resume_from, map_location=device, weights_only=False)
+        # ALWAYS load onto CPU first, regardless of the target training
+        # device. A checkpoint is a heterogeneous bundle: model/optimizer
+        # tensors are fine to relocate, but torch_rng_state (a CPU
+        # ByteTensor, per torch.get_rng_state()) and cuda_rng_state (a list
+        # of CPU ByteTensors, per torch.cuda.get_rng_state_all() -- these
+        # describe CUDA generator state but are themselves always CPU-side
+        # byte buffers) MUST stay on CPU to remain valid inputs to
+        # torch.set_rng_state()/torch.cuda.set_rng_state_all(). Passing
+        # map_location=device (e.g. "cuda:0") here blindly relocated EVERY
+        # tensor in the pickle, including these, which is exactly what
+        # caused "TypeError: RNG state must be a torch.ByteTensor" on the
+        # GPU server (a CUDA-resident tensor is no longer accepted there).
+        # Model/optimizer state tensors still end up on the correct
+        # training device below, via net.load_state_dict()/
+        # optimizer.load_state_dict() (which copy into the already
+        # device-resident net/optimizers constructed further down) and via
+        # explicit .to(device) casts for col_weights/u_weights -- none of
+        # that depends on the checkpoint itself being pre-relocated.
+        resume_state = torch.load(resume_from, map_location="cpu", weights_only=False)
         mode = resume_state["mode"]
         budget_name = resume_state["budget_name"]
         seed = resume_state["seed"]

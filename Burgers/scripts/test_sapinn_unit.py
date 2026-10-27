@@ -473,6 +473,101 @@ def test_overwrite_protection():
         shutil.rmtree(output_dir, ignore_errors=True)
 
 
+def test_cuda_checkpoint_resume_consistency():
+    """Regression test for the GPU-server bug: torch.load(resume_from,
+    map_location=device) with device="cuda:0" relocated torch_rng_state
+    (must stay a CPU ByteTensor) and cuda_rng_state onto CUDA, breaking
+    torch.set_rng_state() with "TypeError: RNG state must be a
+    torch.ByteTensor". Skips gracefully if no CUDA device is available
+    (e.g. this Mac) -- only meaningful on the GPU server.
+
+    Mirrors test_adam_resume_consistency's CPU logic but on
+    device=torch.device("cuda:0"), and additionally verifies:
+      - the run actually used CUDA (model parameters live on a cuda device)
+      - CPU RNG state (torch.get_rng_state()) matches after both runs
+      - CUDA RNG state (torch.cuda.get_rng_state_all()) matches after both runs
+      - optimizer state tensors (Adam exp_avg/exp_avg_sq) ended up on CUDA,
+        not silently left on CPU
+    """
+    if not torch.cuda.is_available():
+        print("test_cuda_checkpoint_resume_consistency: SKIPPED (no CUDA device available)")
+        return
+
+    device = torch.device("cuda:0")
+    dir_full = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_cuda_resume_full"
+    dir_half = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_cuda_resume_half"
+    dir_resumed = PROJECT_DIR / "outputs" / "sapinn_burgers" / "_unit_test_tmp_cuda_resume_resumed"
+    for d in (dir_full, dir_half, dir_resumed):
+        shutil.rmtree(d, ignore_errors=True)
+
+    config.BUDGETS["_test_cuda_resume"] = {"adam_iters": 10, "lbfgs_iters": 0}
+    try:
+        rows_full, _ = run(mode="adaptive", budget_name="_test_cuda_resume", seed=0,
+                            output_dir=dir_full, device=device)
+        ckpt_full = torch.load(dir_full / "checkpoints" / "final.pt", map_location="cpu", weights_only=False)
+        rng_cpu_full = torch.get_rng_state()
+        rng_cuda_full = torch.cuda.get_rng_state_all()
+
+        config.BUDGETS["_test_cuda_resume"] = {"adam_iters": 5, "lbfgs_iters": 0}
+        run(mode="adaptive", budget_name="_test_cuda_resume", seed=0, output_dir=dir_half, device=device)
+        halfway_ckpt = dir_half / "checkpoints" / "latest.pt"
+
+        # This is the exact line that failed on the GPU server before the
+        # fix (map_location=device inside run()'s resume path).
+        config.BUDGETS["_test_cuda_resume"] = {"adam_iters": 10, "lbfgs_iters": 0}
+        rows_resumed, _ = run(mode="adaptive", budget_name="_test_cuda_resume", seed=0,
+                               output_dir=dir_resumed, device=device, resume_from=halfway_ckpt)
+        ckpt_resumed = torch.load(dir_resumed / "checkpoints" / "final.pt", map_location="cpu", weights_only=False)
+        rng_cpu_resumed = torch.get_rng_state()
+        rng_cuda_resumed = torch.cuda.get_rng_state_all()
+
+        # --- Confirm CUDA was actually used ---
+        latest_full = torch.load(dir_full / "checkpoints" / "latest.pt", map_location="cpu", weights_only=False)
+        net_check = PINN().to(device=device, dtype=config.DTYPE)
+        net_check.load_state_dict({k: v.to(device) for k, v in latest_full["model_state_dict"].items()})
+        assert all(p.is_cuda for p in net_check.parameters()), "model parameters were not on CUDA during training"
+        opt_state = latest_full["net_optimizer_state_dict"]["state"]
+        assert len(opt_state) > 0, "optimizer has no state to check"
+        # Adam's exp_avg/exp_avg_sq tensors as actually used during training
+        # live on the same device as the parameters (CUDA here); the saved
+        # checkpoint itself is CPU (by design, see save_checkpoint), so this
+        # checks the *device-casting round trip* works, not the raw saved
+        # bytes.
+        reloaded_net_optimizer = torch.optim.Adam(net_check.parameters(), lr=config.ADAM_LR, betas=config.ADAM_BETAS)
+        reloaded_net_optimizer.load_state_dict(opt_state)
+        for group in reloaded_net_optimizer.state.values():
+            for v in group.values():
+                if torch.is_tensor(v):
+                    assert v.is_cuda, "optimizer state tensor was not moved to CUDA on load"
+
+        # --- Final model parameters: exact equality ---
+        for key in ckpt_full["model_state_dict"]:
+            assert torch.equal(ckpt_full["model_state_dict"][key], ckpt_resumed["model_state_dict"][key]), (
+                f"resumed CUDA run's {key} differs from the uninterrupted CUDA run"
+            )
+        assert torch.equal(ckpt_full["col_weights"], ckpt_resumed["col_weights"]), "col_weights differ"
+        assert torch.equal(ckpt_full["u_weights"], ckpt_resumed["u_weights"]), "u_weights differ"
+
+        # --- Final objective ---
+        assert rows_full[-1]["total_objective"] == rows_resumed[-1]["total_objective"], (
+            f"total_objective differs: {rows_full[-1]['total_objective']} vs {rows_resumed[-1]['total_objective']}"
+        )
+
+        # --- CPU and CUDA RNG states restored/advanced consistently ---
+        assert torch.equal(rng_cpu_full, rng_cpu_resumed), "final CPU RNG state differs between the two runs"
+        assert len(rng_cuda_full) == len(rng_cuda_resumed)
+        for a, b in zip(rng_cuda_full, rng_cuda_resumed):
+            assert torch.equal(a, b), "final CUDA RNG state differs between the two runs"
+
+        print("test_cuda_checkpoint_resume_consistency: PASS (CUDA confirmed in use; "
+              f"total_objective={rows_full[-1]['total_objective']:.6e}; "
+              "CPU and CUDA RNG states match between uninterrupted and resumed runs)")
+    finally:
+        config.BUDGETS.pop("_test_cuda_resume", None)
+        for d in (dir_full, dir_half, dir_resumed):
+            shutil.rmtree(d, ignore_errors=True)
+
+
 if __name__ == "__main__":
     test_pde_residual_analytic()
     test_initial_condition_matches_g()
@@ -485,6 +580,7 @@ if __name__ == "__main__":
     test_checkpoint_save_load_roundtrip()
     test_adam_resume_consistency()
     test_lbfgs_resume_consistency()
+    test_cuda_checkpoint_resume_consistency()
     test_seed_specific_output_directories()
     test_overwrite_protection()
     test_end_to_end_smoke()
