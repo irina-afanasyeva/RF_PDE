@@ -11,6 +11,7 @@ if str(PROJECT_DIR / "scripts") not in sys.path:
     sys.path.insert(0, str(PROJECT_DIR / "scripts"))
 
 from sapinn import config, physics, sampling  # noqa: E402
+from sapinn.model import PINN  # noqa: E402
 from sapinn.train import run  # noqa: E402
 
 # Lightweight assert-based tests, matching this project's existing
@@ -164,8 +165,6 @@ def test_baseline_and_adaptive_share_initial_state():
     adaptive runs must start from IDENTICAL collocation/IC/BC points and
     IDENTICAL initial network weights -- only the attention-weight path
     may differ."""
-    from sapinn.model import PINN
-
     device = torch.device("cpu")
     config.set_all_seeds(123)
     tensors_a = sampling.build_training_tensors(123, device)
