@@ -24,8 +24,9 @@ them is the attention-weight path (see attention.py):
                       run -- isolates whether fixed_weight's failure was
                       caused by the weights being frozen per se, or by the
                       severe PDE/IC scale IMBALANCE in that specific
-                      configuration (effective 10,000x on PDE vs. ~0.25x
-                      mean on IC).
+                      configuration (effective 10,000x on PDE vs.
+                      E[u**2]=1/3~0.333x mean on IC, not the
+                      previously-stated "~0.25x").
 
 Safeguards enforced here (see task spec):
   - "weighted_pde_loss" and "unweighted_pde_mse" are always separate,

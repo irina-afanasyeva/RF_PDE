@@ -1828,3 +1828,163 @@ RF+`u_local`, motivated directly by the PDE-residual-vs-solution-error
 mismatch already documented in Sections 27–29, 33, and 39 above. See
 `docs/meetings/2026-10-21.md` for the full meeting record and `TODO.md`
 for the reordered actionable plan.
+
+## 41. SA-PINN implementation, reproduction, and 10-seed campaign (P1/P2 from Section 40)
+
+**Paper identified** (resolves the Section 40 placeholder): McClenny &
+Braga-Neto, "Self-Adaptive Physics-Informed Neural Networks using a Soft
+Attention Mechanism," arXiv:2009.04544. Reference code:
+`github.com/levimcclenny/SA-PINNs`, `Burgers/burgers.py` +
+`eager_lbfgs.py`. A from-scratch PyTorch reimplementation lives in
+`Burgers/sapinn/` (not inside `burgers_rf/`, kept fully isolated), with
+every numeric choice tagged `[CODE]`/`[PAPER]`/`[CHOICE]` for provenance in
+`sapinn/config.py`'s module docstring.
+
+**Architecture** (`sapinn/config.py`): 8 hidden layers of 20 neurons,
+tanh activation, Glorot-normal init — 9 Linear layers, **3,021 trainable
+network parameters** (60 + 7×420 + 21). Self-adaptive attention: one
+scalar weight per PDE collocation point (`N_F=10,000`) and one per IC
+point (`N_0=100`) — **10,100 attention parameters**, none for the BC term
+(always unweighted MSE in the reference). During Adam, all three
+parameter groups train (13,121 total); **attention weights are frozen
+during the L-BFGS phase**, matching the reference exactly (`lbfgs()` is
+only ever called on the network weights).
+
+**Verified mask arithmetic**: the reference computes
+`mean((lambda*residual)**2)`, i.e. an effective **quadratic** mask
+`m(lambda) = lambda**2`, not the identity `m(lambda)=lambda`
+(`sapinn/attention.py` docstring). `COL_WEIGHT_INIT=100` therefore gives
+an effective initial PDE-loss multiplier of 10,000, not 100.
+
+**Verified discrepancy, paper vs. code**: the paper's Section 4.1 text
+states `N_b=200` boundary points; the actual committed reference code uses
+`N_B_PER_SIDE=25` (50 total). Our implementation follows the runnable code
+(50 total) and records rather than silently resolves this mismatch
+(`sapinn/config.py`).
+
+**Five training modes** (`sapinn/attention.py`): `baseline` (weights≡1,
+i.e. ordinary PINN), `adaptive` (reference-faithful, gradient-ascent
+weights), `fixed_weight` (col=100, u~Uniform(0,1), frozen — the original,
+*imbalanced* ablation control), `balanced_10`/`balanced_100` (both masks
+frozen at the same constant, 10 or 100 — added specifically to separate
+"frozen" from "imbalanced" as candidate explanations for `fixed_weight`'s
+failure).
+
+**Multi-seed campaign**: all 5 modes × seeds 0–9 (paper-scale budget,
+10,000 Adam + up to 10,000 L-BFGS), run via
+`scripts/run_sapinn_campaign.py`, analyzed read-only by
+`scripts/analyze_sapinn_campaign.py`
+(`outputs/sapinn_burgers/campaign_analysis/`).
+
+Global relative L2 (mean ± std over 10 seeds, `fixed_weight` excluded —
+see below): baseline 2.42e-3 ± 1.51e-3, adaptive 9.77e-4 ± 4.42e-4,
+balanced_10 5.86e-4 ± 2.71e-4, balanced_100 5.21e-4 ± 4.16e-4. Shock-region
+relative L2: baseline 2.52e-2 ± 2.22e-2, adaptive 6.54e-3 ± 5.87e-3,
+balanced_10 4.95e-3 ± 2.94e-3, balanced_100 3.06e-3 ± 3.16e-3. Both
+balanced modes beat `adaptive` on global and shock error in most seeds
+(balanced_100 wins shock in 7/10 seeds vs. adaptive, 8/10 vs. balanced_10).
+Mechanistically, scaling PDE and IC masks by the *same* constant leaves
+their gradient ratio unchanged from baseline's own ratio, while a
+single-seed gradient-norm check (`outputs/sapinn_burgers/
+comparison_five_modes_seed0/REPORT.md`) showed `fixed_weight`'s mismatched
+masks (100 vs. ~0.49 mean, the measured IC gradient scale for that seed's
+actual `u_weights` draw — not the theoretical `E[lambda**2]=1/3`, see the
+unrelated correction below) distort that ratio by >40,000x.
+
+**Comparison with the published benchmark**: paper reports
+4.80e-4 ± 1.01e-4 over 10 *unseeded* restarts; our `adaptive` mode gives
+9.77e-4 ± 4.42e-4 over 10 *seeded* runs — same order of magnitude, not a
+reproduction claim, given the disclosed dtype/sampling/`N_b` differences
+above and the paper's own result being unseeded
+(`outputs/sapinn_burgers/campaign_analysis/published_comparison.json`).
+
+**`fixed_weight` is numerically unstable — 7/10 seeds fail**, audited
+read-only without retraining: 6 seeds (2,3,5,6,7,8) hit the training
+code's own `nonfinite` guard mid-L-BFGS and halt with every final metric
+NaN; 1 seed (1) diverges to a global L2 of ~7.5e8 that evades the
+`nonfinite` guard entirely (the guard only checks `total_objective` and
+the attention-weight tensors, not the evaluation-grid relative L2), and is
+then misread by L-BFGS's own tolerance-based stopping as "converged early";
+only 3 seeds (0,4,9) give the previously-documented catastrophic-but-finite
+failure (global L2 ≈ 0.45–0.73). Naively averaging the 4 finite seeds gives
+a mean dominated almost entirely by the one divergent seed (1.88e8) — not
+a meaningful summary. `baseline`, `adaptive`, `balanced_10`, `balanced_100`
+have **zero** nonfinite runs across all 40 seeds. Full breakdown:
+`outputs/sapinn_burgers/meeting_summary/MEETING_SUMMARY.md` and
+`fixed_weight_breakdown.json`.
+
+**Correction**: existing comments in `sapinn/config.py`, `attention.py`,
+and `train.py` stated the IC mask's mean as "~0.25" for
+`u_weights ~ Uniform(0,1)`. For `X ~ Uniform(0,1)`,
+`E[X**2] = integral_0^1 x**2 dx = 1/3 ≈ 0.333`, not `1/4`. Corrected in
+all three files (comment-only; no behavior change — `u_weights` is still
+drawn via `torch.rand(...)`, unaffected by the comment).
+
+## 42. RF Stage 1: L-BFGS refinement and Adam-continuation vs. the canonical Adam baseline
+
+Following the Section 40/41 direction to investigate whether loss-function
+or optimization changes help the RF model, Stage 1 tested the narrowest
+possible change — optimizer only, same RF architecture, same loss, no
+self-adaptive weighting yet — before touching anything else. Scripts:
+`scripts/rf_lbfgs_{common,stage1a_baseline,stage1b_refinement,
+stage1c_adam_continuation}.py`, `outputs/rf_lbfgs_stage1/`.
+
+**Stage 1a (baseline reproduction gate)**: canonical Nx=500, Nt=10,
+seed=42, 1000 Adam epochs, unmodified `burgers_rf.physics.train()`.
+Reproduced the Section 31 reference values to within 3-5e-9 relative error
+(global 0.271494302, smooth 0.244382710, shock 0.839048803, PDE MSE
+0.235900084 — reference: 0.27149430095802507 / 0.2443827084159696 /
+0.8390487998889169 / 0.23590008351925892). Wall-clock 182.4s (CPU). The
+extended checkpoint additionally saves the Adam optimizer state and the
+exact PDE collocation tensors used (neither was previously persisted
+anywhere for the RF model).
+
+**Stage 1b (L-BFGS refinement, 500 iterations, one continuous
+`step()` call, strong-Wolfe line search)**, from the Stage 1a checkpoint,
+with IC/BC points **frozen** for the refinement phase (the canonical loss
+resamples IC/BC every epoch; L-BFGS requires a deterministic closure).
+Drove the unweighted training objective down sharply (PDE MSE
+0.236→0.201, final gradient norm 158→1.07, BC MSE improved ~1,500x) but
+**slightly worsened held-out relative L2** (global 0.2715→0.2758, shock
+0.8390→0.8633) — L-BFGS over-fit the frozen collocation points at the
+expense of the independent evaluation grid. Ran the full 500-iteration
+budget without triggering its own convergence tolerance.
+
+**Stage 1c (Adam continuation, 500 steps, restored Adam optimizer state,
+same frozen points as 1b)**: modestly **improved** held-out relative L2
+(global 0.2715→0.2700, shock 0.8390→0.8389) in less wall-clock time
+(87.7s vs. 98.0s for 1b). Optimizer-state restoration verified
+byte-identical (`exp_avg`/`exp_avg_sq`/`step`), not just "ran without
+error."
+
+**Numerical finding**: chunked `torch.optim.LBFGS.step()` calls are **not**
+bit-identical to one continuous call for this RF model (unlike the SA-PINN
+model, where this equivalence was proven in Section 41/`
+scripts/test_sapinn_lbfgs_chunking.py`) — verified empirically
+(`scripts/test_rf_lbfgs_chunking_equivalence.py`); Stage 1b therefore uses
+one continuous call, and chunking is explicitly not used for any reported
+result.
+
+**Interpretation**: under the frozen-collocation-point protocol required
+for a deterministic L-BFGS closure, L-BFGS and Adam trade off differently
+— L-BFGS minimizes the frozen-point objective more aggressively but at a
+mild cost to generalization, while continued Adam from the same state
+improves generalization modestly. This is a single-seed, single-budget
+result (500 iterations each); no claim of a general optimizer ranking for
+this model is made.
+
+## 43. October 28, 2026 meeting checkpoint
+
+**Status at the meeting.** Section 41 (SA-PINN implementation, five-mode
+10-seed campaign, `fixed_weight` instability audit) and Section 42 (RF
+Stage 1 Adam/L-BFGS comparison) were presented.
+
+**Professors' direction**: (1) investigate whether self-adaptive
+pointwise weighting improves the RF solver (SA-RF); (2) match trainable
+parameter counts between SA-PINN and SA-RF; (3) revisit the SA-PINN setup
+to track the published paper more closely, specifically (4) using 200
+total boundary points (matching the paper's stated `N_b`, Section 41)
+instead of the current 50 (the reference code's value). See
+`docs/meetings/2026-10-28.md` for the full record, including which parts
+of item (2) are a confirmed decision versus a proposed, not-yet-confirmed
+interpretation, and `TODO.md` for the reordered actionable plan.

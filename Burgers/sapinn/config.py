@@ -72,7 +72,9 @@ U_WEIGHT_INIT_DIST = "uniform_0_1"
 # [CHOICE] "Balanced" fixed-weight diagnostic modes, added to separate
 # "frozen" from "imbalanced" as candidate explanations for the original
 # fixed_weight mode's failure (col=100 i.e. effective 10,000x on PDE,
-# u~U(0,1) i.e. effective ~0.25x mean on IC -- a 40,000x imbalance). Both
+# u~U(0,1) i.e. effective E[u**2]=1/3~0.333x mean on IC -- a ~30,000x
+# imbalance; corrected from an earlier, incorrect "~0.25x"/"40,000x"
+# figure -- E[X**2] for X~Uniform(0,1) is 1/3, not 1/4). Both
 # PDE and IC masks are set to the SAME constant, frozen throughout. Mode
 # names double as their own output-directory names (see scripts/
 # train_sapinn.py), so these are also the authoritative set of valid

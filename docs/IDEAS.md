@@ -294,19 +294,41 @@ experiments. See `RESEARCH_LOG.md` for what has actually been run and
 
 27. **Self-adaptive collocation-point weighting — 2026-10-21 advisor
     direction (`docs/meetings/2026-10-21.md`, `RESEARCH_LOG.md` Section
-    40), UNTESTED.** The professor pointed to a self-adaptive PINN method
-    (paper reference not yet supplied — placeholder) that assigns a weight
-    to each collocation point and adjusts those weights during training,
-    with a reported viscous Burgers benchmark (the paper's Section 4.1).
-    Candidate idea for this project: investigate whether an analogous
-    adaptive per-collocation-point weighting (or another loss-function
-    modification motivated by the same principle) could help the RF model
-    — directly motivated by the repeatedly observed mismatch between PDE
-    residual reduction and actual solution-error reduction (`RESEARCH_LOG.md`
-    Sections 27–29, 33, 39). **This is entirely untested and depends on
-    first reading the paper and reproducing its own Burgers result (see
-    `TODO.md` items P1/P2) before any adaptation to the RF model is
-    attempted.** Do not invent the paper's algorithm or hyperparameters.
+    40). Paper now identified and reproduced (McClenny & Braga-Neto,
+    arXiv:2009.04544; `RESEARCH_LOG.md` Section 41) — the "read the paper
+    and reproduce it" part of this item is DONE.** A from-scratch SA-PINN
+    implementation (`Burgers/sapinn/`) and a 10-seed, 5-mode campaign
+    confirm the method's effective quadratic mask, the paper-vs-code
+    `N_b` discrepancy (200 vs. 50), and that *balanced* (equal-scale)
+    static weighting can outperform the adaptive mechanism itself on this
+    problem — see Section 41 for the full result. **The transfer to the
+    RF model (originally the untested part of this item) is now the
+    active SA-RF work item — see item 28 below and `TODO.md`'s current
+    priority list.**
+
+28. **SA-RF: self-adaptive pointwise loss weighting for the RF model —
+    2026-10-28 advisor direction (`docs/meetings/2026-10-28.md`,
+    `RESEARCH_LOG.md` Section 43), NOT YET IMPLEMENTED.** The core
+    scientific research question for this line of work:
+
+    > Can self-adaptive pointwise loss weighting improve a
+    > fixed-random-feature approximation for nonlinear PDEs, and how does
+    > its performance compare with SA-PINNs under matched
+    > trainable-parameter budgets?
+
+    Builds directly on item 27: SA-PINN's `adaptive` mode and its
+    `balanced_10`/`balanced_100` controls are now characterized (Section
+    41); the open question is whether an analogous gradient-ascent
+    pointwise weighting, applied to the RF model's PDE/IC loss terms,
+    helps in the same way. **The "matched trainable-parameter budgets"**
+    part of this question is itself not yet fully specified — SA-PINN
+    splits into 3,021 network parameters and 10,100 attention parameters,
+    and which of these the RF-side comparison should match is flagged as
+    unconfirmed in `docs/meetings/2026-10-28.md`; do not finalize an
+    experimental parameter count without that confirmation. See
+    `TODO.md`'s current-priority list for the concrete implementation
+    steps (attention mechanism, gradient calculations, controlled
+    baseline, 2026-11-04 meeting prep).
 
 ## Ideas already tested — evidence against (do not re-attempt without new reasoning)
 

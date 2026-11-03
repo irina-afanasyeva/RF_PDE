@@ -47,8 +47,9 @@ Weight-construction modes provided:
     disentangle "frozen" from "imbalanced" as separate candidate causes of
     make_fixed_weights' failure -- see docs/RESEARCH_LOG.md). Unlike
     make_fixed_weights (col=100, u~U(0,1), i.e. PDE and IC terms given very
-    different effective scales -- lambda**2=10,000 for PDE vs. ~0.25 mean
-    for IC), this sets col_weights AND u_weights to the SAME constant
+    different effective scales -- lambda**2=10,000 for PDE vs. E[u**2]=1/3
+    ~0.333 mean for IC, not the previously-stated "~0.25"), this sets
+    col_weights AND u_weights to the SAME constant
     value, both frozen. Two concrete instances are used:
     balanced_10 (value=10, effective mask 100 on both PDE and IC) and
     balanced_100 (value=100, effective mask 10,000 on both). If these

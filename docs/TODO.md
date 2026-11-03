@@ -3,32 +3,54 @@
 Actionable research plan. See `RESEARCH_LOG.md` for the numerical results and
 reasoning behind each item; this file tracks priority and status only.
 
-## Current priority — self-adaptive PINN investigation (2026-10-21 advisor direction)
+## Current priority — SA-RF and SA-PINN paper-fidelity follow-up (2026-10-28 advisor direction)
 
-**Following the 2026-10-21 advisor meeting** (`docs/meetings/2026-10-21.md`;
-`RESEARCH_LOG.md` Section 40), after seed/Nx-Nt/LR/long-training diagnostics
-(Sections 36–39) were reviewed, the professor asked that we study a
-self-adaptive PINN method that assigns and adjusts per-collocation-point
-weights during training, and try to reproduce its viscous Burgers
-benchmark. This is now the top priority, ahead of the remaining Phase-A
-items below.
+**P1/P2 are now DONE** (see `RESEARCH_LOG.md` Section 41): the paper was
+identified (McClenny & Braga-Neto, arXiv:2009.04544), a from-scratch
+PyTorch SA-PINN implementation was built (`Burgers/sapinn/`), and a
+10-seed campaign across five weighting configurations (`baseline`,
+`fixed_weight`, `adaptive`, `balanced_10`, `balanced_100`) was run and
+audited. A narrow RF-only optimizer experiment (L-BFGS refinement vs.
+continued Adam, no self-adaptive weighting yet) was also completed
+(`RESEARCH_LOG.md` Section 42). These results were presented at the
+2026-10-28 meeting (`docs/meetings/2026-10-28.md`; `RESEARCH_LOG.md`
+Section 43), which set the following priorities, ahead of the remaining
+Phase-A items below:
 
-**P1. Read and understand the self-adaptive PINN paper**, focusing on its
-Section 4.1 viscous Burgers experiment. **Paper reference: not yet
-supplied — placeholder, do not invent a citation or algorithm details.**
+1. **Verify SA-PINN paper settings and boundary-point sampling.** Confirm
+   the exact paper-vs-code boundary-point discrepancy already documented
+   (`RESEARCH_LOG.md` Section 41: paper states `N_b=200`, reference code
+   uses 50) and any other settings worth re-checking before the 200-point
+   re-run.
+2. **Implement and validate the 200-boundary-point SA-PINN experiment**
+   (100 per side, replacing the current 25-per-side/50-total setting) and
+   re-run the campaign (or at minimum seed 0) under this setting.
+3. **Verify the RF parameter-matching strategy** before implementing it —
+   the professors' "match trainable parameters" direction is ambiguous
+   given SA-PINN's 3,021 network + 10,100 attention parameter split; the
+   working interpretation (match the 3,021 network/coefficient count,
+   account for attention parameters separately) is **not yet confirmed**
+   (see `docs/meetings/2026-10-28.md`).
+4. **Implement SA-RF attention weights and gradient ascent** — pointwise
+   self-adaptive weights on the RF model's PDE and IC loss terms,
+   analogous to SA-PINN's `adaptive` mode.
+5. **Validate the SA-RF loss and gradient calculations** before any
+   training run (deterministic unit tests, analogous to the SA-PINN and
+   RF-Stage-1 test suites already in `scripts/`).
+6. **Run controlled RF baseline vs. SA-RF comparisons**, including a
+   frozen fixed-weight RF control analogous to SA-PINN's
+   `fixed_weight`/`balanced_*` modes, to separate "adaptive" from
+   "frozen-but-reweighted" effects.
+7. **Prepare results for the 2026-11-04 research meeting.**
 
-**P2. Reproduce the paper's self-adaptive PINN viscous Burgers result**,
-once the paper and its exact setup are available.
-
-**P3. Investigate transferring adaptive collocation-point weighting to the
-RF model** — exact mechanism TBD, depends on P1/P2.
-
-**P4. Investigate loss-function modifications for RF-only and RF+`u_local`**
-that could improve solution accuracy, directly motivated by the repeatedly
-observed mismatch between PDE-residual reduction and actual solution-error
+8. **(Carried forward, lower priority than items 1–7.) Investigate
+loss-function modifications for RF-only and RF+`u_local`** that could
+improve solution accuracy, directly motivated by the repeatedly observed
+mismatch between PDE-residual reduction and actual solution-error
 reduction (`RESEARCH_LOG.md` Sections 27–29, 33, and 39 — e.g. Section 39's
 long-training diagnostic: PDE loss decreases monotonically from epoch 1000
-to 5000 while shock error does not improve at all).
+to 5000 while shock error does not improve at all). The SA-RF work above
+(items 4–6) is one concrete instance of this broader question.
 
 ## Phase A — remaining items (improve/understand u_RF)
 
@@ -231,6 +253,19 @@ been checked.
   state was ever saved) gives only a small global/smooth improvement and
   no shock-region improvement; PDE loss keeps decreasing while shock error
   does not.
+- SA-PINN implementation, reproduction, and 10-seed, 5-mode campaign
+  (Section 41) — adaptive SA-PINN matches the published benchmark's order
+  of magnitude (9.77e-4 vs. 4.80e-4); both balanced fixed-weight controls
+  outperform adaptive on average; the original imbalanced fixed_weight
+  control fails in 7/10 seeds (audited: 6 NaN, 1 undetected finite
+  divergence, 3 poor-but-finite).
+- RF Stage 1: L-BFGS refinement and Adam-continuation vs. canonical Adam
+  (Section 42) — Stage 1a reproduces the canonical baseline to within
+  3-5e-9 relative error; from that checkpoint, 500 L-BFGS iterations reduce the
+  frozen-point training objective sharply but slightly worsen held-out
+  relative L2, while 500 continued-Adam steps (restored optimizer state)
+  modestly improve it; L-BFGS chunking is NOT bit-identical to a
+  continuous call for this RF model (unlike SA-PINN).
 
 ## Workflow
 
