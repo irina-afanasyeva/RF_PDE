@@ -27,7 +27,7 @@ def _clean():
     shutil.rmtree(SCRATCH_ROOT, ignore_errors=True)
 
 
-def _tiny_setup(mode="adaptive", seed=11, device="cpu"):
+def _tiny_setup(mode="adaptive", seed=11, device="cpu", lambda_f_init=None, lambda_0_init=None):
     torch.set_default_dtype(config.DTYPE)
     config.set_all_seeds(seed)
     tensors = sampling.build_training_tensors(seed, device, n_f=TINY_N_F, n_0=TINY_N_0, n_b_per_side=TINY_N_B)
@@ -35,7 +35,10 @@ def _tiny_setup(mode="adaptive", seed=11, device="cpu"):
     coef = train.trainable_coefficients(model)
     generator = torch.Generator(device="cpu").manual_seed(seed)
     if mode == "adaptive":
-        lambda_f, lambda_0 = attention.make_adaptive_weights(TINY_N_F, TINY_N_0, device, generator)
+        lambda_f, lambda_0 = attention.make_adaptive_weights(
+            TINY_N_F, TINY_N_0, device, generator,
+            lambda_f_init=lambda_f_init, lambda_0_init=lambda_0_init,
+        )
     elif mode == "fixed_weight":
         lambda_f, lambda_0 = attention.make_fixed_weights(TINY_N_F, TINY_N_0, device, generator)
     else:
@@ -230,6 +233,67 @@ def test_baseline_adaptive_balanced_share_identical_init_features_and_points():
     print("test_baseline_adaptive_balanced_share_identical_init_features_and_points: PASS")
 
 
+def test_constant_lambda_0_init_preserves_rng_sequence():
+    """Attention-initialization sweep requirement: overriding lambda_0_init
+    with a numeric constant must SKIP the torch.rand draw entirely, not
+    draw-then-overwrite -- so the generator's RNG state/sequence is
+    provably untouched by the override."""
+    device = "cpu"
+    gen_a = torch.Generator(device="cpu").manual_seed(123)
+    state_before = gen_a.get_state().clone()
+    lambda_f, lambda_0 = attention.make_adaptive_weights(
+        5, 5, device, gen_a, lambda_f_init=10.0, lambda_0_init=10.0,
+    )
+    state_after = gen_a.get_state()
+    assert torch.equal(state_before, state_after), (
+        "a constant lambda_0_init override must not consume any RNG state"
+    )
+    assert torch.all(lambda_f == 10.0) and torch.all(lambda_0 == 10.0)
+
+    # A subsequent draw from gen_a (now that make_adaptive_weights has run)
+    # must be bit-identical to a draw from a FRESH generator seeded the
+    # same way -- proving gen_a's sequence truly was not perturbed.
+    next_draw_a = torch.rand((4,), generator=gen_a)
+    gen_b = torch.Generator(device="cpu").manual_seed(123)
+    next_draw_b = torch.rand((4,), generator=gen_b)
+    assert torch.equal(next_draw_a, next_draw_b), (
+        "RNG sequence diverged after a constant lambda_0_init override -- "
+        "the override must consume ZERO random draws"
+    )
+    print("test_constant_lambda_0_init_preserves_rng_sequence: PASS")
+
+
+def test_attention_init_variants_share_identical_features_coefficients_and_points():
+    """Attention-initialization sweep requirement: the override changes
+    ONLY attention initialization, never RF features, RF coefficients, or
+    collocation points, across all three planned sweep variants (A: lf=10
+    lambda_0~U(0,1); B: lf=1 lambda_0~U(0,1); C: lf=10 lambda_0=10)."""
+    seed = 9
+    variants = [
+        dict(lambda_f_init=10.0, lambda_0_init=None),
+        dict(lambda_f_init=1.0, lambda_0_init=None),
+        dict(lambda_f_init=10.0, lambda_0_init=10.0),
+    ]
+    setups = [_tiny_setup(mode="adaptive", seed=seed, **v) for v in variants]
+    ref_model, ref_coef, ref_tensors, _, _ = setups[0]
+    for model, coef, tensors, _, _ in setups[1:]:
+        assert torch.equal(model.Wx, ref_model.Wx) and torch.equal(model.Wt, ref_model.Wt)
+        assert torch.equal(model.bx, ref_model.bx) and torch.equal(model.bt, ref_model.bt)
+        assert torch.equal(coef.detach(), ref_coef.detach()), "initial RF coefficients differ across variants"
+        for key in ("x_f", "t_f", "x0", "t0", "x_lb", "t_lb", "x_ub", "t_ub"):
+            assert torch.equal(tensors[key], ref_tensors[key]), f"collocation tensor '{key}' differs across variants"
+
+    # Sanity: the attention values themselves DO differ as intended per variant.
+    lambda_f_a, lambda_0_a = setups[0][3], setups[0][4]
+    lambda_f_b, lambda_0_b = setups[1][3], setups[1][4]
+    lambda_f_c, lambda_0_c = setups[2][3], setups[2][4]
+    assert torch.all(lambda_f_a == 10.0) and torch.all(lambda_f_b == 1.0) and torch.all(lambda_f_c == 10.0)
+    assert torch.all(lambda_0_c == 10.0)
+    assert torch.equal(lambda_0_a, lambda_0_b), "variants A and B must share the SAME Uniform(0,1) draw (same seed)"
+    assert not torch.equal(lambda_0_a, lambda_0_c), "variant C's constant lambda_0 must differ from A/B's draw"
+    print("test_attention_init_variants_share_identical_features_coefficients_and_points: PASS")
+
+
 # 11. NaN/Inf detection works for loss, gradients, coefficients, and attention weights.
 def test_nonfinite_detection():
     model, coef, tensors, lambda_f, lambda_0 = _tiny_setup(mode="adaptive")
@@ -334,6 +398,8 @@ if __name__ == "__main__":
     test_attention_unchanged_during_lbfgs()
     test_same_seed_reproducibility()
     test_baseline_adaptive_balanced_share_identical_init_features_and_points()
+    test_constant_lambda_0_init_preserves_rng_sequence()
+    test_attention_init_variants_share_identical_features_coefficients_and_points()
     test_nonfinite_detection()
     test_boundary_loss_normalization_matches_sapinn_convention()
     test_finite_difference_gradient_check()

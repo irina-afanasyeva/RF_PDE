@@ -165,13 +165,21 @@ def _atomic_save(obj, path):
 def run(
     mode, budget_name, seed, output_dir, nx=None, nt=None,
     n_f=None, n_0=None, n_b_per_side=None, device=None, overwrite=False,
-    coef_lr=None,
+    coef_lr=None, lambda_f_init=None, lambda_0_init=None,
 ):
     """coef_lr overrides the RF-coefficient Adam optimizer's learning rate
     only (default: config.ADAM_LR). The attention ascent optimizers
     (lambda_f_optimizer/lambda_0_optimizer) always use config.ADAM_LR,
     regardless of coef_lr -- they are NOT affected by this override, by
-    design (see scripts/run_sa_rf_lr_sweep.py, which sweeps coef_lr only)."""
+    design (see scripts/run_sa_rf_lr_sweep.py, which sweeps coef_lr only).
+
+    lambda_f_init/lambda_0_init are OPTIONAL scalar overrides for the
+    initial attention values, used ONLY by mode="adaptive" (see
+    attention.make_adaptive_weights). Defaults (None) reproduce the exact
+    original behavior (lambda_f=100, lambda_0~Uniform(0,1)). They do NOT
+    affect RF features, RF coefficients, collocation points, or evaluation
+    data -- those are all constructed before this override is applied (see
+    scripts/run_sa_rf_attention_init_sweep.py, which sweeps these only)."""
     assert mode in MODES, mode
     assert budget_name in config.BUDGETS, budget_name
     device = device or config.get_device()
@@ -214,7 +222,10 @@ def run(
     # lambda_0, giving them bit-identical initial attention parameters.
     cpu_generator = torch.Generator(device="cpu").manual_seed(seed)
     if mode == "adaptive":
-        lambda_f, lambda_0 = attention.make_adaptive_weights(n_f_actual, n_0_actual, device, cpu_generator)
+        lambda_f, lambda_0 = attention.make_adaptive_weights(
+            n_f_actual, n_0_actual, device, cpu_generator,
+            lambda_f_init=lambda_f_init, lambda_0_init=lambda_0_init,
+        )
     elif mode == "fixed_weight":
         lambda_f, lambda_0 = attention.make_fixed_weights(n_f_actual, n_0_actual, device, cpu_generator)
     elif mode in config.BALANCED_MODE_VALUES:
@@ -382,7 +393,11 @@ def run(
         "n_b_per_side": tensors["x_lb"].shape[0],
         "n_attention_parameters": n_f_actual + n_0_actual,
         "nv": config.NV, "sigma_x": config.SIGMA_X, "sigma_t": config.SIGMA_T,
-        "lambda_f_init": config.LAMBDA_F_INIT, "lambda_0_init_dist": config.LAMBDA_0_INIT_DIST,
+        # Actual resolved initialization values used for THIS run (not
+        # just the global config default) -- records the real override
+        # when lambda_f_init/lambda_0_init were passed to run().
+        "lambda_f_init": config.LAMBDA_F_INIT if lambda_f_init is None else lambda_f_init,
+        "lambda_0_init": config.LAMBDA_0_INIT_DIST if lambda_0_init is None else lambda_0_init,
         "adam_lr": config.ADAM_LR, "coef_lr": coef_lr, "adam_betas": list(config.ADAM_BETAS),
         "lbfgs_history_size": config.LBFGS_HISTORY_SIZE, "lbfgs_lr": config.LBFGS_LR,
         "warnings": warnings_log,

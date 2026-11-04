@@ -47,11 +47,27 @@ def identity_mask(weights):
     return weights
 
 
-def make_adaptive_weights(n_f, n_0, device, generator):
-    lambda_f = torch.full((n_f, 1), config.LAMBDA_F_INIT, dtype=config.DTYPE, device=device)
+def make_adaptive_weights(n_f, n_0, device, generator, lambda_f_init=None, lambda_0_init=None):
+    """lambda_f_init/lambda_0_init are OPTIONAL scalar overrides for the
+    initial attention values (added for the attention-initialization
+    sensitivity sweep). Defaults (None) reproduce the exact original
+    behavior: lambda_f_init defaults to config.LAMBDA_F_INIT (100),
+    lambda_0_init defaults to a Uniform(0,1) draw from `generator`.
+
+    IMPORTANT RNG-preservation property: when lambda_0_init is given as a
+    numeric override, the torch.rand(...) draw is SKIPPED ENTIRELY (not
+    drawn-then-overwritten) -- `generator`'s internal state is left
+    completely untouched in that case, so any code downstream that
+    expects a specific RNG sequence from `generator` is unaffected by
+    this override. Verified in test_sa_rf_unit.py."""
+    lambda_f_value = config.LAMBDA_F_INIT if lambda_f_init is None else float(lambda_f_init)
+    lambda_f = torch.full((n_f, 1), lambda_f_value, dtype=config.DTYPE, device=device)
     lambda_f.requires_grad_(True)
 
-    lambda_0 = torch.rand((n_0, 1), generator=generator, dtype=config.DTYPE).to(device)
+    if lambda_0_init is None:
+        lambda_0 = torch.rand((n_0, 1), generator=generator, dtype=config.DTYPE).to(device)
+    else:
+        lambda_0 = torch.full((n_0, 1), float(lambda_0_init), dtype=config.DTYPE, device=device)
     lambda_0.requires_grad_(True)
     return lambda_f, lambda_0
 
