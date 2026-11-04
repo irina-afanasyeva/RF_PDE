@@ -118,6 +118,11 @@ BUDGETS = {
                                                               # estimated ~4.8 min/run from the "short"
                                                               # sweep's measured per-iteration cost --
                                                               # still far short of "paper".
+    "long": {"adam_iters": 5000, "lbfgs_iters": 1000},       # [CHOICE] longer-training server budget,
+                                                              # estimated ~26 min/run (CPU) from the same
+                                                              # measured per-iteration cost as "controlled"
+                                                              # -- intended for the compute server, not
+                                                              # local/interactive use.
     "paper": {"adam_iters": 10000, "lbfgs_iters": 10000},
 }
 
